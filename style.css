@@ -2181,3 +2181,130 @@ div.gradio-container {
         padding: 0.75rem !important;
     }
 }
+
+@media (max-width: 1024px) {
+    .resize-handle-row {
+        display: flex !important;
+        flex-direction: column;
+        gap: 1rem !important;
+    }
+
+    .resize-handle-row > .resize-handle {
+        display: none !important;
+    }
+
+    .resize-handle-row > :not(.resize-handle) {
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: 100%;
+    }
+
+    #img2img_results,
+    #txt2img_results,
+    #extras_results {
+        position: static;
+    }
+
+    #quicksettings {
+        display: grid !important;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+    }
+
+    #quicksettings > div,
+    #quicksettings > button {
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: 100%;
+        margin: 0;
+    }
+
+    #settings {
+        display: block;
+    }
+
+    #settings > div.tab-nav {
+        position: sticky;
+        top: 0;
+        z-index: 4;
+        display: flex;
+        gap: 0.35rem;
+        overflow-x: auto;
+        padding: 0.5rem;
+        border-right: 0;
+        border-bottom: 1px solid var(--border-color-primary);
+        background: var(--body-background-fill);
+        scrollbar-width: thin;
+    }
+
+    #settings > div.tab-nav button {
+        flex: 0 0 auto;
+        width: auto;
+        white-space: nowrap;
+    }
+
+    #settings > div:not(.tab-nav) {
+        padding: 0.75rem 0;
+    }
+}
+
+@media (max-width: 700px) {
+    .gradio-container button,
+    .gradio-container input,
+    .gradio-container select {
+        min-height: 42px;
+    }
+
+    .gradio-container input[type="checkbox"],
+    .gradio-container input[type="radio"] {
+        min-height: 1rem;
+        min-width: 1rem;
+    }
+
+    .gradio-container input[type="range"] {
+        min-height: 32px;
+        touch-action: pan-y;
+    }
+
+    #tabs > .tab-nav {
+        scroll-snap-type: x proximity;
+        scrollbar-width: thin;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    #tabs > .tab-nav button {
+        min-height: 44px;
+        scroll-snap-align: start;
+    }
+
+    #forge_theme_toggle {
+        min-height: 44px;
+    }
+
+    #txt2img_prompt,
+    #img2img_prompt,
+    #txt2img_neg_prompt,
+    #img2img_neg_prompt {
+        min-height: 5.5rem;
+    }
+
+    #txt2img_results_panel,
+    #img2img_results_panel {
+        box-shadow: none;
+    }
+}
+
+@media (hover: none), (prefers-reduced-motion: reduce) {
+    .gradio-container *,
+    #forge_theme_toggle {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+    }
+
+    .gradio-container .gradio-button.primary:hover,
+    .gradio-container button.primary:hover,
+    #forge_theme_toggle:hover {
+        transform: none;
+    }
+}

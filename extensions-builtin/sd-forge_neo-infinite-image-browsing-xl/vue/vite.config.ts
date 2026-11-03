@@ -17,10 +17,10 @@ export default defineConfig({
     preprocessorOptions: {
       modules: true,
       less: {
-        // #d03f0a// https://github.com/vueComponent/ant-design-vue/blob/main/components/style/themes/default.less
+        // https://github.com/vueComponent/ant-design-vue/blob/main/components/style/themes/default.less
         modifyVars: {
-          'primary-color': '#d03f0a',
-          'link-color': '#d03f0a'
+          'primary-color': '#536fe5',
+          'link-color': '#536fe5'
         },
         javascriptEnabled: true
       }

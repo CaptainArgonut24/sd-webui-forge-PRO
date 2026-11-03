@@ -11,11 +11,22 @@
         leftCol: null,
         leftColStartWidth: null,
         screenX: null,
+        pendingWidth: null,
+        animationFrame: null,
         lastTapTime: null,
     };
 
     let resizeTimer;
     let parents = [];
+
+    function applyPendingResize() {
+        if (R.pendingWidth === null || !R.parent) {
+            return;
+        }
+
+        setLeftColGridTemplate(R.parent, R.pendingWidth);
+        R.pendingWidth = null;
+    }
 
     function setLeftColGridTemplate(el, width) {
         el.style.gridTemplateColumns = `${width}px 16px 1fr`;
@@ -152,10 +163,16 @@
                     delta = R.screenX - evt.changedTouches[0].screenX;
                 }
                 const leftColWidth = Math.max(
-                    Math.min(R.leftColStartWidth - delta, R.parent.offsetWidth - R.parent.minRightColWidth - PAD),
+                    Math.min(R.leftColStartWidth - delta, R.parentWidth - R.parent.minRightColWidth - PAD),
                     R.parent.minLeftColWidth,
                 );
-                setLeftColGridTemplate(R.parent, leftColWidth);
+                R.pendingWidth = leftColWidth;
+                if (R.animationFrame === null) {
+                    R.animationFrame = window.requestAnimationFrame(() => {
+                        R.animationFrame = null;
+                        applyPendingResize();
+                    });
+                }
             }
         });
     });
@@ -172,6 +189,11 @@
                 evt.preventDefault();
                 evt.stopPropagation();
 
+                if (R.animationFrame !== null) {
+                    window.cancelAnimationFrame(R.animationFrame);
+                    R.animationFrame = null;
+                }
+                applyPendingResize();
                 R.tracking = false;
 
                 document.body.classList.remove("resizing");

@@ -989,7 +989,7 @@ def setup_ui_api(app):
     def network_links(request: Request):
         if not getattr(cmd_opts, "network_listening", False):
             return HTMLResponse(
-                "<h1>Local network access is not active</h1><p>Enable the setting in Settings &gt; System, save it, and select Reload UI.</p>",
+                "<h1>Local network access is not active</h1><p>Enable the setting in Settings &gt; Network, save it, and select Reload UI.</p>",
                 status_code=409,
             )
 

@@ -162,15 +162,25 @@ options_templates.update(
 
 options_templates.update(
     options_section(
+        ("network", "Network", "system"),
+        {
+            "network_access_explanation": OptionHTML("""
+<p>Local access URL</p>
+<p><a id="network_current_url_link" href="./"><code>Loading current URL...</code></a></p>
+<p>Use this address on the computer running Forge. To open Forge from another device on your local network, enable network access below, apply the setting, and select <b>Reload UI</b>.</p>
+<p><a href="./internal/network-links" target="_blank" rel="noopener">View URLs for devices on your local network</a></p>
+<p>Only enable network access on a trusted network. Configure <code>--gradio-auth</code> in your launch arguments if you need a username and password.</p>
+                """),
+            "listen_on_local_network": OptionInfo(False, "Allow access from other devices on my local network").needs_reload_ui(),
+        },
+    )
+)
+
+options_templates.update(
+    options_section(
         ("system", "System", "system"),
         {
             "setting_allocated_vram": OptionInfo(1.0, "GPU Weights", gr.Slider, {"minimum": 0.0, "maximum": 1.0, "step": 0.05}).info("amount of VRAM that Forge can access").info("in % of total vram"),
-            "network_access_explanation": OptionHTML("""
-Allow devices on your local network to open this Web UI. Save the setting, then select <b>Reload UI</b> to apply it.
-Only enable this on a trusted network. Anyone who can reach the Web UI may be able to use it; configure <code>--gradio-auth</code> in your launch arguments to require a username and password.
-<br><a href="./internal/network-links" target="_blank" rel="noopener">View local network access links</a>
-                """),
-            "listen_on_local_network": OptionInfo(False, "Allow access from other devices on my local network").needs_reload_ui(),
             "res_step": OptionInfo(64, "Resolution Step", gr.Radio, {"choices": (8, 16, 32, 64, 128, 256)}).info('"64" is recommended to prevent compatibility issues').needs_restart(),
             "auto_launch_browser": OptionInfo("Local", "Launch the webui in browser on startup", gr.Radio, {"choices": ("Disable", "Local", "Remote")}).info("Remote = always automatically start; Local = only when not sharing the server, such as <b>--share</b>"),
             "enable_console_prompts": OptionInfo(False, "Print the generation prompts to console"),

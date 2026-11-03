@@ -26,6 +26,21 @@ function toggle_theme() {
     window.location.replace(url.toString());
 }
 
+function update_network_current_url() {
+    const link = gradioApp().getElementById("network_current_url_link");
+    if (!link) return;
+
+    const url = new URL(window.location.href);
+    url.searchParams.delete("__theme");
+    url.hash = "";
+    const currentURL = url.toString();
+    if (link.href !== currentURL) link.href = currentURL;
+    if (link.textContent !== currentURL) link.textContent = currentURL;
+}
+
+onUiLoaded(update_network_current_url);
+onAfterUiUpdate(update_network_current_url);
+
 function all_gallery_buttons() {
     const allGalleryButtons = gradioApp().querySelectorAll(
         '[style="display: block;"].tabitem div[id$=_gallery].gradio-gallery .thumbnails > .thumbnail-item.thumbnail-small',
