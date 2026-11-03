@@ -15,7 +15,7 @@ __pycache__
 /config_states/
 /embeddings
 /extensions
-extensions-builtin/
+
 /models/**/*
 /output
 /outputs

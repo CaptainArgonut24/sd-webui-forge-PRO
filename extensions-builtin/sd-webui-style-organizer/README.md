@@ -1,0 +1,408 @@
+# Style Grid for Stable Diffusion WebUI (Forge, reForge, A1111)
+
+Style Grid replaces the default style dropdown with a fast, visual interface for browsing, selecting, and applying styles in Stable Diffusion WebUI hosts that load extension `javascript/*.mjs` as ES modules (Forge, reForge, and AUTOMATIC1111 — see **Requirements**).
+
+It supports:
+- category-based browsing
+- source-aware filtering
+- deduplicated All Sources view with source picker
+- favorites and recent styles
+- **LoRA cards** in a dedicated **🧬 LoRA** sidebar view (scanned from disk, read-only)
+- drag reorder of selected styles
+- presets, backup, import/export
+- thumbnail generation/upload and cleanup tools
+- optional CivitAI title enrichment for LoRAs (manual fetch)
+
+See `CHANGELOG.md` for full release history.
+
+---
+
+## Requirements
+
+**Minimum WebUI / Forge for this extension:** builds that load extension `javascript/*.mjs` as ES modules (`<script type="module">`).
+
+| Host | Minimum |
+|------|---------|
+| **AUTOMATIC1111** `stable-diffusion-webui` | **1.1.0** and later (`v1.1.0`) |
+| **Forge / reForge** | Any release (loader inherited from A1111; present from Forge’s first commit) |
+
+**Fact check (loader source):** A1111 added `.mjs` as `type="module"` in commit [`b90cad7f`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/commit/b90cad7f3136bbe04efeee2a00e95d0cc6ce1a4a) (2023-02-23), merged to master as [`e15c4f31`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/commit/e15c4f31e3ec0d2d979832dede0f9b34f4631c7a) via [PR #8042](https://github.com/AUTOMATIC1111/stable-diffusion-webui/pull/8042) (2023-03-11). Loader loop (then in `modules/ui.py`, later moved to `modules/ui_gradio_extensions.py`):
+
+```python
+for script in scripts.list_scripts("javascript", ".mjs"):
+    head += f'<script type="module" src="{webpath(script.path)}"></script>\n'
+```
+
+There is no git tag `v1.0.0`; pre-release tag `v1.0.0-pre` (2023-01-24) does **not** include this loader. The first tagged A1111 release that does is **`v1.1.0`** ([`72cd27a1`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/commit/72cd27a13587c9579942577e9e3880778be195f6), 2023-05-01). Forge ([`lllyasviel/stable-diffusion-webui-forge`](https://github.com/lllyasviel/stable-diffusion-webui-forge), created 2024-01-14) was based on A1111 ~1.7.0-era master and already contained the same `.mjs` path at its first commit [`7ad2a5c1`](https://github.com/lllyasviel/stable-diffusion-webui-forge/commit/7ad2a5c19521d3d6d2035c6fbf8402ed527f05ec) — no separate Forge `.mjs` commit. reForge keeps the same `modules/ui_gradio_extensions.py` loader. Style Grid’s host entry is `javascript/style_grid.mjs`; sibling modules under `javascript/style_grid/` are imported by that entry (only top-level `javascript/*.mjs` / `*.js` are auto-injected).
+
+Older hosts that only inject `*.js` as classic scripts will not run this extension’s host layer.
+
+---
+
+## Installation
+
+### Install from URL (recommended)
+1. Open **Extensions** in your WebUI (Forge, reForge, or A1111).
+2. Go to **Install from URL**.
+3. Paste this repository URL and install.
+4. Restart the UI.
+
+### Manual install
+
+Clone into the host’s `extensions/` folder (folder name `sd-webui-style-organizer`), then restart the UI:
+
+| Host | Extensions path |
+|------|-----------------|
+| **Forge** | `stable-diffusion-webui-forge/extensions/` |
+| **reForge** | `stable-diffusion-webui-reForge/extensions/` (or your reForge root’s `extensions/`) |
+| **AUTOMATIC1111** | `stable-diffusion-webui/extensions/` |
+
+```bash
+cd /path/to/<webui-root>/extensions
+git clone <this-repository-url> sd-webui-style-organizer
+```
+
+---
+
+## Quick Start
+
+1. Open `txt2img` or `img2img`.
+2. Click the **Style Grid** trigger button to open the panel.
+3. Pick a source (`All Sources` or a specific CSV).
+4. Search or browse categories.
+5. Click a style card to apply/unapply.
+6. Use the **top bar** icon buttons (right of the search box) for backup, import/export, compact/collapse, etc. Presets live in the **left sidebar**.
+
+## Theme
+
+Style Grid follows the Gradio / Forge host light or dark theme:
+
+- The host detects mode from opaque page backgrounds (skips transparent layers) and posts `{ type: 'SG_THEME', mode: 'light' | 'dark' }`.
+- The iframe URL also carries `&theme=` so the first paint matches before `SG_THEME` arrives.
+- Live host theme changes (for example Gradio **system** mode) update the panel without a full reload.
+
+## img2img support
+
+Style Grid works in both generation tabs:
+- txt2img
+- img2img
+
+Behavior is the same in both modes (source filter, deduplication, favorites/recent, context menus, previews, presets).
+The small tab badge in the panel header shows the active host context.
+
+![Style Grid in img2img](docs/screenshots/img2img-support.png)
+
+---
+
+## Core Workflow
+
+### 1) Browse and filter styles
+- Use the left sidebar for category filtering.
+- Use source dropdown for CSV-level filtering.
+- Use search box for instant name filtering.
+
+![Browse and filter styles](docs/screenshots/browse-and-filter.png)
+
+### Search and autocomplete
+- Type in the search box to filter the grid in real time. Query tokens are **AND**-matched (whitespace-separated, case-insensitive): every token must appear in the haystack.
+- Grid search and autocomplete both use `matchesSearch`: style **name** (including underscore→space forms and display-name forms) plus **description**, with `Combos:` / `Conflicts:` reference lists stripped from the description so those lists do not pollute matches.
+- Autocomplete suggestions respect the active source filter (with All Sources, suggestions are deduped by name like the grid). Cap: top 8.
+- **Favorites**, **Recent**, and **Presets** views also respect search and the active source filter (they previously ignored them).
+- Use arrow keys + Enter to pick a suggestion quickly, or click the item with mouse.
+
+![Search with autocomplete suggestions](docs/screenshots/search-autocomplete.png)
+
+### 2) Apply styles from cards
+- Card click toggles selection and applies/unapplies style.
+- Selected styles are tracked in the bottom selected bar.
+- Reorder selected styles by dragging chips in the selected bar.
+
+![Apply styles from cards — selection and bottom bar](docs/screenshots/apply-and-reorder.png)
+
+### 3) All Sources and duplicate names (source picker)
+- With **All Sources** selected, the grid shows **one card per style name** even if that name appears in several CSV files.
+- If the same name exists in more than one file, the **first click** on that card does not toggle the style yet — it opens a small **source picker** next to the card.
+- The picker lists each duplicate as the **CSV file name only** (no folder path, no `.csv` extension). Choose the row you want; that variant is applied like a normal selection.
+- Click outside the picker to close it without applying.
+- If you pick a **specific source** in the dropdown, you always see that file’s styles only — duplicates from other files are not shown together, so the picker is not used.
+
+### 4) Favorites, recent, and LoRA
+- **Favorites:** right‑click a style card → **Add to Favorites** / **Remove from Favorites**. Favorited tiles show a small **star** in the top-right corner. Favorites and Recent are stored by **name + CSV source**, so the same name from two files can be favorited independently.
+- **Recent** lists the last styles you applied (up to 10), grouped by category like the main grid.
+- Open **Favorites** or **Recent** in the left sidebar to filter the grid to those lists (search + source filter apply here too).
+- **🧬 LoRA** appears in the sidebar when at least one LoRA was scanned. Cards are synthetic styles (not CSV rows), grouped by sub-folder under your LoRA roots. See **LoRA support** below.
+
+![LoRA sidebar view — cards grouped by folder, CivitAI titles on tiles](docs/screenshots/lora-view.png)
+
+![Recent — last applied styles](docs/screenshots/recent-styles.png)
+
+![Favorites — styles saved via context menu](docs/screenshots/favorites-view.png)
+
+![Browsing a category — favorited tiles show a star; toggle via context menu or Favorites sidebar](docs/screenshots/favorites-in-category.png)
+
+### 5) Category context menu: wildcards and previews
+
+**Where to open it**
+
+- **Right-click** a **category row** in the **left sidebar** (the colored category list). This is the **only** category context menu.
+- Right-clicking a **category header** inside the main grid (the sticky `▼ CATEGORY (count)` row) **no longer opens a menu** — that duplicate entry point was removed. A normal **left-click** on the header still collapses/expands the section; **Select All** on that row is unchanged.
+
+**Menu actions**
+
+| Item | What it does |
+|---|---|
+| **Wildcard: random (can repeat)** → **Whole category** | Inserts a token into the **positive prompt** on the Forge side: `{sg:<category>}`. The category name is normalized to **lowercase** to match how styles are grouped. |
+| **Wildcard: random (can repeat)** → **Pick styles...** | Opens a **slice-selection mode** in the grid: tick individual styles with checkboxes. Search and the source filter keep working; **Select all** covers only the styles currently visible after filtering. **Add as wildcard** inserts a **slice** token for exactly that selection; **Cancel** discards it. |
+| **Wildcard: shuffle (no repeats in a batch)** → **Whole category** | Inserts a token into the **positive prompt** on the Forge side: `{sgd:<category>}`. The category name is normalized to **lowercase** to match how styles are grouped. |
+| **Wildcard: shuffle (no repeats in a batch)** → **Pick styles...** | Opens a **slice-selection mode** in the grid: tick individual styles with checkboxes. Search and the source filter keep working; **Select all** covers only the styles currently visible after filtering. **Add as wildcard** inserts a **slice** token for exactly that selection; **Cancel** discards it. |
+| **Generate previews…** | Queues **thumbnail generation** for styles in that category (batch job in the host). Always shown; does not report a missing-preview count. |
+
+![Sidebar category context menu — Wildcard: random (can repeat) and Wildcard: shuffle (no repeats in a batch) with Whole category / Pick styles..., and Generate previews…](docs/screenshots/category-context-wildcard-previews.png)
+
+![Slice-selection mode — mode bar with selection count and Select all / Clear all / Add as wildcard / Cancel; per-card checkboxes; search stays active](docs/screenshots/slice-selection-mode.png)
+
+**How `{sg:…}` wildcards work**
+
+- **Syntax (whole category):** `{sg:<category>}` — curly braces, the `sg` / `sgd` prefix (case-insensitive, so `{SG:…}` and `{SGD:…}` work too), then the **category label** as it appears in Style Grid (e.g. `ACCESSORY` or `accessory`). Only this pattern is special; the regex is `\{(sgd?):…\}` with `re.IGNORECASE` (see `stylegrid/wildcards.py`).
+- **Syntax (slice):** `{sg:<category>:<spec>}`. Spec entries are comma-separated **style-name suffixes without the category prefix** — e.g. `{sg:body:Tanned,Shortstack}`, not `BODY_Tanned`. A leading `-` excludes (`{sg:body:-Tanned}` = whole category minus that style); a trailing `*` is a prefix glob (`{sg:body:Male_*}`).
+- **Slice resolution:** include entries are **unioned** first, then excludes **subtract**. If every listed name is missing from the CSV, the token **falls back to the whole category** rather than breaking the prompt. The UI writes whichever form is shortest (so selecting almost an entire category often produces a compact exclude token); the resolver understands all forms regardless.
+- **When it runs:** tokens are expanded **at generation time** inside Style Grid’s own processing hook (`scripts/style_grid.py`), **before** the rest of the prompt is handled like a normal WebUI prompt.
+- **What gets inserted:** one **random** style from the resolved pool (whole category or slice). A wildcard in the positive field pulls the style’s `prompt`; in the negative field it pulls `negative_prompt`. Category matching is **case-insensitive**. The draw follows the seed: a fixed seed repeats the same picks, seed -1 gives new ones.
+- **The picked style’s negative comes along:** a token in the positive prompt also adds that style’s `negative_prompt` to the same image’s negative, after your own negative text, in token order, then duplicates are merged. A negative tag that also appears in the expanded positive is dropped (written to the log at INFO level). This always runs. The infotext records the picks as `Style Grid styles: "NAME (file.csv), …"`.
+- **Empty fields:** an empty chosen field resolves to an empty string (the token is not kept), on both the positive and negative sides.
+- **Nesting depth:** nested `{sg:…}` / `{sgd:…}` tokens resolve in up to **3** passes. Leftovers after that are stripped with a warning.
+- **Source-aware pool:** if a specific CSV is selected in the source filter, wildcard replacement picks styles only from that source; with **All Sources**, it uses the merged style pool.
+- **Where you can put it:** positive or negative prompt box — **both strings are scanned**. A token in the negative box that also appears in the positive box reuses the positive pick (the k-th occurrence pairs with the k-th one).
+- **Unknown category:** the raw token is left in place through nested passes, then stripped with a warning.
+- **Chips:** the selected bar shows each active `{sg:…}` as a chip. Slice chips display the **real** number of styles the token can resolve to, with those style names in the tooltip.
+
+![Wildcard chips — slice chip `category (N)` beside a plain whole-category chip, with matching `{sg:…}` tokens in the prompt](docs/screenshots/wildcard-slice-chips.png)
+
+- You can type or paste tokens manually; the context menu only inserts the same formats.
+
+**Compatibility with other “wildcard” extensions (e.g. `stable-diffusion-webui-wildcards` / Dynamic Prompts `__file__` style)**
+
+- Those stacks usually recognize **different** syntax — commonly **`__name__`** (double underscores) or other Dynamic Prompts / custom grammar — not `{sg:…}`.
+- Style Grid only looks for **`{sg:…}`** and **`{sgd:…}`**; other extensions only interpret **their** patterns. The two do **not** use the same delimiters, so they **do not fight over the same text** in normal use.
+- **You do not need** the Automatic1111 wildcards extension (or any extra wildcard plugin) **for Style Grid’s `{sg:…}` feature** — it is implemented **inside this extension** (Python `resolve_sg_wildcards` + your style CSV data). Other wildcard extensions remain optional for their own `__…__` / file-based workflows.
+
+#### 🃏 Shuffle wildcards
+
+A **shuffle wildcard** draws styles **without repeats across batches**. `{sgd:category}` uses every style once before any style comes back, advancing **one deck position per batch**. Images inside one batch share the same pick (same as `{sg:...}`). To get a different style on every image, set **batch size 1** and raise **batch count**.
+
+- **Syntax:** `{sgd:category}` for a whole category, `{sgd:category:spec}` for a slice. The spec grammar is the same as for `{sg:...}` (names, `-excludes`, `Root_*` globs), and the order of entries does not matter.
+- **Insert:** right-click a category and use the *Wildcard: shuffle* group (*Whole category* or *Pick styles...*), or type the token by hand. Shuffle chips have their own icon and can be reordered, removed and saved in presets like any other wildcard.
+- **Scope of uniqueness:** one generation, counted in **batches** (batch count), not images. A fixed seed repeats the same order, seed -1 gives a new order on every click.
+- **Several tokens:** repeating the same token in one prompt draws a different style for each occurrence.
+- **Positive and negative prompts:** the same shuffle token in both fields resolves to the same style for a given image.
+- **Duplicates across packs:** styles with identical prompt and negative prompt count once.
+- **Random wildcards keep their own draw.** Mixing `{sg:...}` and `{sgd:...}` in one prompt is fine, they do not influence each other.
+- **Hires fix:** the built-in hires pass reuses the first-pass pick and negative (a hires prompt override reuses the pick for the tokens it shares with the first pass). The post-process ✨ button re-reads the prompt field unless the expanded prompt of the selected image is available, so a shuffle token may then resolve to a different style, just as a random wildcard would.
+- **Presets:** shuffle chips are saved in presets. Older versions of the extension load such presets as random wildcards.
+
+### 6) Style card context menu
+
+**Where to open it**
+
+- **Right-click** a **style card** in the grid (card title hint: *Right-click for options*). *(Left-click still applies the normal select / source-picker rules.)*
+
+**On the tile (not menu items)**
+
+- **Star** (top-right) appears when the style is favorited.
+- **Check** badge (bottom-right) appears when the style is selected.
+
+**Menu actions**
+
+| Item | What it does |
+|---|---|
+| **Select** / **Deselect** | Same as a left-click on the card: applies or removes the style from the active selection (and host prompt), without opening the duplicate-source picker. |
+| **Add to Favorites** / **Remove from Favorites** | Toggles the star list for this style **row** (name + source); the tile star updates immediately. |
+| **Copy prompt** | Copies this style’s **`prompt`** text to the clipboard (toast on success/failure). |
+| **Edit** | Opens the host **style editor** for this style. |
+| **Duplicate** | Opens the host flow to duplicate the style (typically into the same or chosen source). |
+| **Move to category...** | Opens the host dialog to change the style’s **category** field. |
+| **Generate preview (SD)** | Runs **thumbnail generation** for this style (Stable Diffusion–based preview in the host). |
+| **Upload preview image** | Opens the host **file picker** to set a custom thumbnail image. |
+| **Remove preview** | Shown only when the style already has a thumbnail. Deletes the cached preview for this style’s **name + source** (surfaces errors instead of silently no-oping). |
+| **Delete** | Removes the style (host confirms and updates CSV). Styles from the shipped **`samples/`** pack cannot be modified via the API (read-only). |
+
+**LoRA cards:** Edit / Duplicate / Move / Generate preview / Upload preview / Remove preview / Delete are **hidden**. Select, Favorites, and Copy prompt remain. The server also rejects CSV save/delete for LoRA-sourced rows.
+
+Click **outside** the menu to close it (moving the pointer off the menu does **not** dismiss it).
+
+![Style card context menu](docs/screenshots/style-card-context-menu.png)
+
+### 7) Thumbnail previews and the hover popup
+
+**Generating a preview**
+
+- **Per style:** open the style’s context menu (**right-click** the card) → **Generate preview (SD)**. The host runs an SD render and saves an image under user-data `thumbnails/` (see **Data and Persistence**).
+- **Per category:** use the **category** context menu → **Generate previews…** (see §5).
+
+After a successful run, the iframe is notified so the UI can refresh that style’s thumbnail version.
+
+Thumbnail images are loaded via `GET /style_grid/thumbnail?name=…&source=…` (CSV styles **require** `source` = that row’s `source_file`). Preview URLs may also include a version for browser cache. **Generate / upload / delete** send the same source identity so duplicate names across CSVs keep separate previews. Generation is queued (`job_id`); the host polls status and can cancel.
+
+**Upgrading from older builds:** thumbnails used to be stored under a **name-only** hash. On first `GET /thumbnails/list`, a unique name is renamed to the new `(name, source)` file automatically. If the same style name exists in more than one loaded pack, that old file is **not** assigned to either pack — regenerate the preview for each.
+
+**What the card shows**
+
+- The **grid card** is a compact label (name and category color accent). The **generated image is not shown inside the tile** — you see it when you **hover**.
+
+**Hover popup (preview window)**
+
+- **Pause ~300 ms** on a card to open the popup (reduces flicker when moving the mouse quickly).
+- **Top:** the thumbnail image (if the file exists and loads). If the image is missing or fails to load, you still get the **text** below.
+- **Title:** the style display name.
+- **Prompt:** first **120 characters** of the style’s **`prompt`** column, with `...` if longer.
+- **Negative:** first **60 characters** of **`negative_prompt`**, prefixed with **−** and shown in a muted red tone.
+
+The popup is **fixed** near the card and flips **above** or **below** depending on available space.
+
+![Hover popup — thumbnail, prompt snippet, negative line](docs/screenshots/thumbnail-hover-preview.png)
+
+---
+
+### 8) Fullscreen mode
+
+- Click the **Fullscreen** button in the top-right corner of the panel to switch between floating window mode and edge-to-edge view.
+- Fullscreen gives the grid and sidebar more horizontal space, which is useful for large category lists and long browsing sessions.
+- Click the same button again to return to the regular floating panel size.
+
+![Fullscreen mode](docs/screenshots/fullscreen-mode.png)
+
+## Top bar (icon buttons on the right)
+
+**What this means:** not a separate “toolbar” window — it is the **top header row** of the Style Grid panel: **Style Grid** title, `txt2img`/`img2img` tag, **source** dropdown, **search**, then a row of **small icon buttons on the right** (`ToolBtn` with lucide icons + tooltips). Hover an icon for its label. **Presets** are in the **left sidebar**, not here. There is no Random button.
+
+![Top bar — icon buttons (right of search)](docs/screenshots/top-bar-icons.png)
+
+| Control | What it does |
+|---|---|
+| Backup / Restore | Opens the **Backup / Restore** modal. **Create backup** writes a timestamped snapshot under the user-data `backups/` folder (folder + `.zip`) of loaded style CSVs plus `presets.json`, `category_order.json`, `favorites.json`, and `recent.json` when present. Keeps directory distinction (`styles/` vs `samples/` vs external paths) so same basenames do not overwrite each other. Thumbnails are **opt-in** via the modal checkbox **Include thumbnails (large)** (API body flag `include_thumbnails`). **Restore** picks a listed snapshot and creates an automatic safety backup of the current state first. Failures, HTTP errors, or “nothing to copy” are reported via toasts (see `docs/API.md` § `/backup` / `/restore`). |
+| Import/Export | Export/import styles, presets, **favorites**, and **recent**. Style import is **rejected** if any imported name already exists in the library (toast lists collisions); presets still merge. |
+| Clear all selected styles | Clears all selected styles in the panel and on the host, and wipes both the prompt and negative prompt textareas. |
+| Compact mode | Toggles a denser card layout (`aria-pressed` when active). |
+| Collapse all / Expand all | One control: **Collapse all** when every category is expanded; **Expand all** when any category is collapsed. |
+| New style | Creates a style in the **currently selected CSV**. Disabled until a specific (non–read-only) source is selected — tooltip explains why. |
+| Fetch LoRA titles | Visible **only** in the **🧬 LoRA** sidebar view. Opt-in: calls CivitAI’s public API using `modelId` already present in each LoRA’s local `.json` metadata; caches titles under user-data `lora_titles.json`. Rate-limited; reopen the panel after the run to see updated labels. |
+
+![Fetch LoRA titles — toolbar tooltip in LoRA view](docs/screenshots/lora-fetch-titles.png)
+
+| *N* selected | Shown when at least one style is selected. |
+| Style conflicts | When conflicts exist, a pulsing count badge opens a **click-to-open** popover (not hover-only) listing reasons; each row can remove the conflicting style. |
+| Fullscreen / Exit fullscreen | Toggles between the floating panel size and edge-to-edge layout. |
+| Close Style Grid | Closes the Style Grid panel. |
+
+---
+
+## LoRA support
+
+Style Grid can show installed LoRAs as style cards so they search, favorite, and apply/unapply like CSV styles.
+
+| Topic | Behavior |
+|---|---|
+| Discovery | Best-effort auto-detect of Forge/A1111 LoRA dirs (`paths_internal.models_path/Lora`, `cmd_opts.lora_dir`, `cmd_opts.lyco_dir`), plus optional **`config/lora_roots.json`** (gitignored; copy from `config/lora_roots.json.example`). Roots are merged and deduped by **realpath** so junctions/symlinks do not double-scan. |
+| Scan depth | Fully recursive unless `max_depth` is set in `lora_roots.json`. |
+| Card identity | Synthetic `source_file` / source marker `__style_grid_lora__`. Style keys look like `LORA_<stem>` (disambiguated with relative folder when stems collide). Apply injects `<lora:stem:weight>` plus optional activation text from sibling metadata. |
+| Metadata | Sibling `<stem>.json` (A1111/Forge extra-networks / CivitAI Browser+): preferred weight, activation / negative text, description/notes, `modelId`. |
+| Previews | Only real sibling preview files (`*.preview.*` preferred, else bare image next to the model). **Never** SD-generated thumbnails for LoRA cards. |
+| Sidebar | **🧬 LoRA** special view (shown when at least one LoRA was scanned). LoRAs are excluded from the CSV source dropdown and from normal category lists. |
+| Titles | Optional **🌐** toolbar action fetches CivitAI model names via `GET https://civitai.com/api/v1/models/{id}` (manual only; sequential + throttled; retries HTTP 429). Successful titles become `display_name` on cards/hover. |
+| Read-only | UI hides mutate actions; `save_style_to_csv` / `delete_style_from_csv` raise if `source_file` is the LoRA marker. |
+| Refresh | Reloading styles (`GET /styles` / panel refresh) rescans LoRA roots when the scan cache is cold or invalidated. |
+
+![🧬 LoRA view — CHARACTER folder group with titled cards](docs/screenshots/lora-view.png)
+
+![Fetch LoRA titles from CivitAI — toolbar control](docs/screenshots/lora-fetch-titles.png)
+
+---
+
+## Data and Persistence
+
+User-writable files live under the WebUI data directory
+(`shared.cmd_opts.data_path` / `--data-dir`), in a `style_grid/` subdirectory
+(typically `<WebUI>/style_grid/` when using the default data dir). If the host
+API is unavailable, the extension falls back to `<extension>/data/`.
+
+| File/Folder | Purpose |
+|---|---|
+| `presets.json` | Saved presets |
+| `category_order.json` | Persisted category order |
+| `favorites.json` | Favorited style row keys (name + source) |
+| `recent.json` | Recently applied style row keys (max 10) |
+| `backups/` | Timestamped backups of style CSVs + metadata JSON (folder + `.zip`); thumbnails optional |
+| `thumbnails/` | Thumbnail image cache (CSV styles) |
+| `lora_titles.json` | Cached CivitAI LoRA titles (by `modelId`) |
+
+Optional local config (not committed; still under the extension folder):
+
+| File | Purpose |
+|---|---|
+| `config/lora_roots.json` | Extra LoRA scan roots / optional `max_depth` (see `.example`) |
+
+Local UI chrome still uses browser localStorage (active source, compact/collapse preferences, thumbnail cache-bust versions). Favorites and Recent are **server-side** under the user data root. On first open after upgrade, legacy `sg_v2_favorites` / `sg_v2_recent` localStorage keys are migrated once when the server files are absent.
+
+**Export / Import** JSON includes styles, presets, **favorites**, and **recent**.
+
+**Backup / Restore** (toolbar): creates snapshots under `backups/` that include CSVs plus `presets.json`, `category_order.json`, `favorites.json`, and `recent.json`. Thumbnails are opt-in (size shown in the dialog). Restore picks a snapshot and creates an automatic safety backup of the current state first.
+
+> **Data location:** User data lives under the WebUI data directory (`style_grid/`), so **data survives reinstall since this version**. On first launch after upgrade, an existing `<extension>/data/` tree is **copied** once into the new root (marker file prevents a second copy). The old `<extension>/data/` folder is **not** auto-deleted.
+
+---
+
+## CSV Format
+
+Primary style fields:
+- `name`
+- `prompt`
+- `negative_prompt`
+- optional metadata: `description`, `category`
+
+Detailed specification: `docs/CSV_FORMAT.md`.
+
+---
+
+## API and Developer Docs
+
+- API reference: `docs/API.md`
+- Development guide: `docs/DEVELOPMENT.md`
+- V2 React bundle (iframe loading, Zustand `useShallow`, `selectFilteredStyles`): `ui/README.md` (also overlaps with **GET `/style_grid/ui`** in `docs/API.md`).
+
+Quality checks run locally via `.githooks/pre-push` (no GitHub Actions). After clone: `git config core.hooksPath .githooks`.
+
+### Remote / share access
+
+When Forge is started with `--listen` or `--share`, mutating Style Grid API routes require a per-session `X-StyleGrid-Token` (injected into the iframe HTML). With `--gradio-auth`, `GET /style_grid/ui` and those write routes also require a Gradio login cookie (`access-token` / `access-token-unsecure` on Gradio 3.x). Prefer `--gradio-auth` whenever the UI is reachable beyond localhost. Details: `docs/DEVELOPMENT.md` § Write-route / Gradio auth.
+
+Corrupt `presets.json` (or similar data files) returns HTTP **409** and refuses overwrite; restore from the sibling `.bak` before saving again.
+
+---
+
+## Troubleshooting
+
+| Issue | What to check |
+|---|---|
+| Panel does not open | Extension enabled + full Forge restart. |
+| Styles missing | CSV location/encoding/header correctness. |
+| Source picker not shown | Must be in `All Sources`, and style must exist in multiple CSVs. |
+| Order seems wrong | Check active source and category order persistence rules. |
+| Thumbnails not appearing | Verify generation/upload status and user-data `thumbnails/` permissions. CSV preview URLs and generate/upload/delete **must** include `source` (`source_file`). Generation is async by `job_id` — wait for completion / check cancel. LoRA cards only show sibling preview files on disk. |
+| **🧬 LoRA** missing in sidebar | No scanned models yet — check Forge LoRA folder / `config/lora_roots.json`, then reload / reopen the Style Grid panel so `/styles` rescans. |
+| LoRA titles still filenames after 🌐 | Wait for fetch to finish (toast), then **reopen the panel** so `/styles` reloads with cached `display_name`. HTTP 429 means rate limit; retry later (failed entries are retried on the next run). |
+| Import fails with “names that already exist” | Rename or remove colliding styles in the export, or delete/rename the existing library entries first. LoRA synthetic names are excluded from the collision check. |
+| Cannot edit/delete a sample style | Expected: CSVs under `samples/` are **read-only**. Copy the style into your own `styles/` CSV (or another writable source) first. |
+| Preset save blocked / **409** | `presets.json` (or another data file) is corrupt — restore from `.bak` next to it; Style Grid will not overwrite bad JSON. |
+| `/style_grid/ui` returns **401** | Expected with `--gradio-auth` until you log in to Gradio (same cookies as the WebUI login). |
+
+---
+
+## Screenshots in this repo
+
+PNG files live under `docs/screenshots/` and are named to match sections in this README. If the UI changes, replace the images but **keep the same filenames** (see `docs/screenshots/README.md` for a refresh checklist).
+
+---
+
+## License
+
+AGPL-3.0 (`LICENSE`)

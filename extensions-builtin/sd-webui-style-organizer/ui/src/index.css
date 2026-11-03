@@ -1,0 +1,140 @@
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  height: 100%;
+  overflow: hidden;
+  @apply font-sans;
+}
+
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden !important;
+  background: transparent;
+}
+
+#root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+@layer base {
+  :root {
+    /* Font tokens on :root so both theme palettes inherit (no unused .theme class).
+       Family name only — Tailwind fontFamily.sans / .heading supply the fallback chain. */
+    --font-sans: "Geist Variable";
+    --font-heading: var(--font-sans);
+
+    color-scheme: dark;
+    --sg-bg: 26 26 46;
+    --sg-surface: 22 33 62;
+    --sg-popover: 15 23 42;
+    --sg-border: 45 45 78;
+    --sg-text: 226 232 240;
+    --sg-muted: 130 145 168;
+    --sg-accent: 88 92 232;
+    --sg-accent-text: 165 180 252;
+    --sg-success: 21 128 61;
+    --sg-success-text: 74 222 128;
+    --sg-danger: 185 28 28;
+    --sg-danger-text: 248 113 113;
+    --sg-warning-text: 252 211 77;
+    --sg-info: 79 70 229;
+    --sg-wildcard: 168 85 247;
+    --sg-wildcard-text: 216 180 254;
+
+    --background: rgb(var(--sg-bg));
+    --foreground: rgb(var(--sg-text));
+    --card: rgb(var(--sg-surface));
+    --card-foreground: rgb(var(--sg-text));
+    --popover: rgb(var(--sg-popover));
+    --popover-foreground: rgb(var(--sg-text));
+    --primary: rgb(var(--sg-accent));
+    --primary-foreground: rgb(255 255 255);
+    --secondary: rgb(var(--sg-surface));
+    --secondary-foreground: rgb(var(--sg-text));
+    --muted: rgb(var(--sg-surface));
+    --muted-foreground: rgb(var(--sg-muted));
+    --accent: rgb(var(--sg-accent));
+    --accent-foreground: rgb(var(--sg-accent-text));
+    --destructive: rgb(var(--sg-danger));
+    --destructive-foreground: rgb(var(--sg-danger-text));
+    --border: rgb(var(--sg-border));
+    --input: rgb(var(--sg-border));
+    --ring: rgb(var(--sg-accent));
+    --chart-1: rgb(var(--sg-accent));
+    --chart-2: rgb(var(--sg-muted));
+    --chart-3: rgb(var(--sg-info));
+    --chart-4: rgb(var(--sg-success));
+    --chart-5: rgb(var(--sg-wildcard));
+    --radius: 0.625rem;
+    --sidebar: rgb(var(--sg-surface));
+    --sidebar-foreground: rgb(var(--sg-text));
+    --sidebar-primary: rgb(var(--sg-accent));
+    --sidebar-primary-foreground: rgb(255 255 255);
+    --sidebar-accent: rgb(var(--sg-bg));
+    --sidebar-accent-foreground: rgb(var(--sg-text));
+    --sidebar-border: rgb(var(--sg-border));
+    --sidebar-ring: rgb(var(--sg-accent));
+  }
+  :root[data-sg-theme="light"] {
+    color-scheme: light;
+    --sg-bg: 248 250 252;
+    --sg-surface: 255 255 255;
+    --sg-popover: 255 255 255;
+    --sg-border: 203 213 225;
+    --sg-text: 15 23 42;
+    --sg-muted: 71 85 105;
+    --sg-accent: 79 70 229;
+    --sg-accent-text: 67 56 202;
+    --sg-success: 21 128 61;
+    --sg-success-text: 21 128 61;
+    --sg-danger: 185 28 28;
+    --sg-danger-text: 185 28 28;
+    --sg-warning-text: 180 83 9;
+    --sg-info: 79 70 229;
+    --sg-wildcard: 147 51 234;
+    --sg-wildcard-text: 126 34 206;
+  }
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Unified scrollbar for ALL scrollable elements */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--sg-accent) / 0.4) transparent;
+}
+*::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgb(var(--sg-accent) / 0.4);
+  border-radius: 2px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--sg-accent) / 0.65);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}

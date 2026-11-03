@@ -1,0 +1,205 @@
+# Development Guide
+
+## Current Architecture (V2)
+
+The extension now uses a hybrid architecture:
+
+- Host layer: `javascript/style_grid.mjs` + `javascript/style_grid/*` (Forge page integration, iframe lifecycle, prompt-side effects).
+- Backend API: `stylegrid/routes.py` and modules under `stylegrid/` (cache, CSV I/O, thumbnails, wildcards, **lora_scan**, **lora_titles**).
+- UI app: `ui/` (React + TypeScript + Vite + shadcn-style components), served inside iframe.
+
+```mermaid
+flowchart LR
+  A[Forge page / Gradio DOM] --> B[javascript/style_grid.mjs]
+  B -->|iframe src GET /style_grid/ui| C[V2 React bundle]
+  B -->|postMessage SG_*| C
+  C -->|postMessage SG_*| B
+  B -->|fetch /style_grid/*| D[FastAPI routes.py]
+  D --> E[(CSV + data/*.json + thumbnails)]
+```
+
+## Repository Layout
+
+```text
+.
+├─ javascript/
+│  ├─ style_grid.mjs                  # Host entry (Forge loads *.mjs as type=module)
+│  ├─ style_grid/                     # Host modules: api, state, prompt-utils, render, events
+│  │  ├─ events.js                    # Thin wiring (imports + hooks + init registration)
+│  │  └─ handlers/                    # Feature handlers (~400 lines each): wildcards, apply,
+│  │                                  # panel, thumbnails(-batch), forge-tabs, iframe(+messages)
+│  └─ sg_prompt_utils.js              # Legacy ESM bridge → prompt-utils (Vitest / test_js.html)
+├─ scripts/style_grid.py              # Forge script entrypoint (imports stylegrid.*)
+├─ stylegrid/                         # Backend package
+│  ├─ routes.py                       # FastAPI registration
+│  ├─ write_auth.py                   # JSON CSRF / Host rebinding / public write token
+│  ├─ gradio_session.py               # Gradio cookie session check for UI + writes
+│  ├─ safe_persistence.py             # Atomic JSON/CSV writes + corrupt-data refusal
+│  ├─ cache.py / csv_io.py / …
+│  ├─ wildcards.py                    # parse_sg_token / select_slice / resolve_sg_wildcards
+│  ├─ lora_scan.py                    # Disk LoRA → synthetic styles
+│  └─ lora_titles.py                  # Opt-in CivitAI title fetch + cache
+├─ config/lora_roots.json.example     # Optional LoRA root overrides (user copies to lora_roots.json)
+├─ ui/                                # React app (builds to ui/dist)
+│  ├─ src/bridge.ts                   # Typed SG_* message contract (Style.display_name?)
+│  ├─ src/store/stylesStore.ts        # selectFilteredStyles, matchesSearch, LORA_VIEW
+│  ├─ src/lib/wildcardSlice.ts        # Compact / resolveSliceNames (chip labels; mirrors Python)
+│  ├─ src/lib/*.test.ts               # Vitest unit + parity tests
+│  ├─ tsconfig.app.json               # Browser app types (excludes *.test.ts)
+│  ├─ tsconfig.test.json              # Node + vite/client types for Vitest files
+│  └─ src/components/                 # UI building blocks
+├─ tests/                              # pytest + fixtures/slice_grammar.json + test_js.html
+├─ .gitattributes                     # ui/dist/** and ui/public/** are -text (no autocrlf)
+├─ docs/API.md
+├─ docs/CSV_FORMAT.md
+└─ docs/DEVELOPMENT.md
+```
+
+## Local Development
+
+### Backend/host script
+
+- Loaded by Forge from extension root; no separate backend server process.
+- Main API registration path: `stylegrid/routes.py` → `register_api(...)` (imported from `scripts/style_grid.py`).
+
+### UI app
+
+```bash
+cd ui
+npm install
+npm run build
+npm test
+```
+
+The floating panel iframe loads **`GET /style_grid/ui`** (registered in `stylegrid/routes.py`). **`_get_ui_html()`** reads `ui/dist/index.html` and rewrites **all** relative `src` / `href` (`./…`) to Gradio **`/file=extensions/sd-webui-style-organizer/ui/dist/...`** with a **new** `?v=` timestamp on **each** HTTP response (not only the main bundle URLs). The host sets `frame.src` to **`/style_grid/ui?t=<Date.now()>`** so the document URL changes when the panel is created. After UI code changes, run **`npm run build`** in `ui/` so `ui/dist/` exists and matches `vite.config.ts`.
+
+**Committed `ui/dist/` + `ui/public/`:** both are marked `-text` in `.gitattributes` so `core.autocrlf` cannot smudge CRLF into the Vite bundle or into static assets Vite copies verbatim (`icons.svg`, `favicon.svg`). After changing the attribute on an existing checkout, rematerialize with `git checkout HEAD -- ui/dist ui/public` if working copies still disagree with HEAD.
+
+**`shadcn`:** listed under `ui` **devDependencies**. The app only `@import "shadcn/tailwind.css"` at build time; the package is the CLI (and its MCP/express subtree), not a runtime dependency.
+
+**V2 store / grid:** filtering for the style grid is implemented as an exported pure function **`selectFilteredStyles(...)`** in `ui/src/store/stylesStore.ts` (shared helpers include `dedupeStylesByNameForAllSources`, **`matchesSearch`**, **`matchesNameSearch`**). Favorites / Recent / **🧬 LoRA** (`LORA_VIEW`) are special branches; the **Presets** sidebar entry short-circuits to **`PresetList`** (not a `selectFilteredStyles` branch). Normal category views **exclude** `source_file === LORA_SOURCE`. **`StyleGrid`** and **`Sidebar`** use Zustand **`useShallow`**. **`StyleGrid`** wraps **`selectFilteredStyles`** in **`useMemo`**.
+
+**LoRA:** `get_cached_styles()` returns CSV cache + `get_cached_lora_styles()`. Optional roots: gitignored `config/lora_roots.json`. Title fetch is iframe-only (`App.tsx` → `POST /style_grid/lora/fetch_titles`); poll status every 1.5s while running. After titles land, reopen the panel so `/styles` reloads with `display_name`.
+## Message Bridge (Host <-> Frame)
+
+Bridge types are declared in `ui/src/bridge.ts`.
+
+**Theme (`SG_THEME`):** Host module `javascript/style_grid/theme.js` picks `light` / `dark` from computed backgrounds (`gradio-app`, `.gradio-container`, `body`, `html`), skipping transparent / low-alpha candidates (`a < 0.5`) before falling back to `prefers-color-scheme`. Contract shape is `{ type: 'SG_THEME', mode }` (not `theme`). `iframe.js` appends `&theme=` on `frame.src`, posts on `SG_READY`, and watches for live changes via `watchHostThemeMode`. The iframe applies mode with `ui/src/lib/themeMode.ts` (`data-sg-theme` + Tailwind `darkMode: 'class'` channel tokens in `index.css`). Contract tests: `ui/src/lib/hostTheme.contract.test.ts`.
+
+**Name+source identity:** Favorites / Recent / host `selected` / `applied` / nest order use `styleRowKey` / `styleIdentityKey` = `source_file + "\\0" + name`. Legacy bare-name favorites migrate in memory on style load when the name is unique; ambiguous duplicates are dropped (not guessed). Presets store `{name, source_file}` (normalized on load). V2 **`SG_APPLY`** / **`SG_UNAPPLY`** carry `source_file`; host resolve uses `findStyleByNameAndSource`. Thumbnail messages **`SG_GENERATE_PREVIEW` / `SG_UPLOAD_PREVIEW`** require `source`; host completion **`SG_THUMB_DONE`** includes `source_file` so duplicate-name cards cache-bust independently.
+
+```mermaid
+sequenceDiagram
+  participant H as Host (style_grid.mjs)
+  participant F as Frame (React UI)
+  participant API as /style_grid/*
+
+  F->>H: SG_READY
+  H->>API: GET /style_grid/styles
+  API-->>H: categories + presets
+  H->>F: SG_INIT (styles array)
+  Note over F: Tab identity from SG_INIT only; SG_HOST_TAB ignored for per-frame tab
+  F->>H: SG_APPLY (styleId + source_file) / SG_UNAPPLY / actions
+  H->>API: CRUD/thumbnail/preset/etc requests
+  H->>F: SG_STYLES_UPDATE / SG_TOAST / SG_THUMB_DONE (name+source) / progress
+```
+
+**Source filter ↔ host:** `SG_SOURCE_CHANGE` carries the selected CSV path (or `null` for All Sources). The host updates `state[tab].selectedSource` / `selectedSourceFile`, the visible source button label, and V1 localStorage via `setStoredSource`. V2 persists active source **per tab** (`sg_v2_last_source_*`) and **always** posts `SG_SOURCE_CHANGE` from `setStyles` (including All Sources) so Gradio clears stale paths. The store avoids echoing duplicate posts when the path is unchanged. **`SG_GENERATE_CATEGORY_PREVIEWS`** may include optional `source`; the host fetches `/style_grid/styles` and filters by category and that source so batch thumbnail jobs match the iframe’s active CSV.
+
+**Iframe routing:** Forge mounts **two** Style Grid iframes (txt2img / img2img). Each tab’s `window.addEventListener("message", …)` must ignore events where `event.source !== frame.contentWindow`, otherwise both handlers would run for every postMessage (wrong tab, wrong `selectedSource`, etc.).
+
+**Thumbnails:** Cached CSV files live under `data/thumbnails/` via `get_thumbnail_path(name, source_file)` (required source). HTTP GET/upload/generate/delete require `source` for CSV styles — see `docs/API.md`. Generation uses the FIFO **`ThumbnailGenerationManager`**: poll `job_id`, cancel via `POST /thumbnail/cancel`. Missing-preview counts come from `GET /thumbnails/list` (`{name, source_file}`), not bare-name localStorage. Per-style generate/upload posts the style’s `source_file` on the bridge (not only the active filter).
+
+**Apply / unapply (`SG_APPLY` / `SG_UNAPPLY`):** The host maintains `state[tab].selected` and `selectedOrder`, because presets and other features read that set — applying a style adds the id and remembers `source_file` on the applied record; unapply removes it. This keeps **Save preset** consistent with what is actually selected. **Reorder** updates `selectedOrder` and rebuilds prompts from existing additive/wrap records (including wrap templates) without fabricating full-prompt deltas.
+
+**Clear:** host `clearAll` wipes both prompt and negative textareas to `""`, then clears selection/applied state and posts `SG_CLEAR_SELECTION` to the iframe. (`userPromptBase` / `userPromptBaseNeg` are still snapshotted on first apply but are not used by Clear.)
+
+**Reorder base (`rebuildPromptFromOrder`):** does **not** read `userPromptBase` / `userPromptBaseNeg` at all. It derives the base from the **live** textareas by unwinding each applied style in reverse `state[tab].appliedNestOrder` (wrap templates stripped by prefix/suffix, additive tags via `removeSubstringFromPrompt`), re-appends in the new order, then re-records `appliedNestOrder = orderedApplied`. Why: the old snapshot was captured once when `applied.size === 0`, so anything typed or inserted afterwards — including `{sg:…}` tokens — was silently dropped on the next reorder.
+
+**Reorder / apply-state edge cases (documented behaviour, not open bugs):**
+
+- **Empty stored delta.** On apply, the host records only tags not already present in the live textarea (`addedPrompt` after dedupe). When a style’s tags are fully covered by the base text or by an earlier-applied style, that delta is `""`. The style stays in `state[tab].applied` — so the grid card keeps its applied dot — but `rebuildPromptFromOrder` appends only truthy `r.prompt`, so the style contributes nothing on rebuild. Net effect: the grid’s applied state and the prompt text can legitimately disagree. This follows from storing deltas rather than full style text.
+- **Rebuild membership is an intersection.** `rebuildPromptFromOrder` iterates `state[tab].selectedOrder` filtered by `applied.has(name)`, and `SG_REORDER_STYLES` replaces `selectedOrder` wholesale with the chip order from the React iframe. Any name present in `applied` but absent from that chip list is dropped from the rebuilt prompt while remaining applied host-side. Under normal operation the two stay in sync; if a style is visibly applied but missing from the prompt after a reorder, check this intersection first.
+- **Provenance:** both behaviours predate the wildcard work — they reproduce on `994084e`, before the wildcard chips/slices branches. Do not re-bisect those commits looking for the cause.
+
+**Prompt tokenization (`splitTopLevelCommas`):** brace-aware as well as paren-aware — a comma only splits when **both** depths are zero, so `{sg:cat:A,B}` stays one segment. Anything that tokenizes prompt text must use this helper rather than `.split(",")`, or slice tokens get shredded. Consumers: `removeWildcardCategory`, `reorderWildcardCategories`, `parseStylePromptTags`, `scalePromptWeights`. **Single source:** `javascript/style_grid/prompt-utils.js` (host + `prompt-utils-bridge.js` for `globalThis`).
+
+**Floating panel outside-click:** `initSGFrame` registers a capture-phase `document` `mousedown` listener to hide the wrapper when clicking outside. Clicks on `.sg-editor-overlay` or `.sg-source-picker` are excluded so **host overlays** (editors, duplicate-source picker) do not dismiss the Style Grid frame.
+
+**Backup / Restore (`SG_BACKUP`):** The iframe posts `SG_BACKUP`; the host opens the **Backup / Restore** modal (`showBackupRestore`). Create uses **`apiPost("/style_grid/backup", { include_thumbnails })`**; list uses **`GET /style_grid/backups`**; restore uses **`POST /style_grid/restore`** (automatic safety snapshot first). Members include CSVs plus `presets.json`, `category_order.json`, `favorites.json`, `recent.json` (thumbnails opt-in). See `docs/API.md` § POST `/backup` / `/restore`.
+
+**Mutating host requests:** Host `POST` / `DELETE` go through `apiPost` / `apiDelete` in `javascript/style_grid/api.js` (shared headers + JSON parse). Panel thumbnail delete uses `styleGridDelete` in `ui/src/lib/styleGridFetch.ts`. Do not call raw `fetch(..., { method: "POST"|"DELETE" })` from `javascript/style_grid/` for mutating routes.
+
+**Import:** failed `POST /import` (including name **collisions**) is shown to the user (alert with error + colliding names); success path unchanged.
+
+**Presets:** Sidebar **Presets** renders **`PresetList`** / **`PresetRow`** (Replace / Add / rename / delete). Save is **`SaveSetDialog`** from **`SelectedBar`** (`savePreset` / overwrite guard on the API). Load applies name+source members via the host apply path (`SG_APPLY` / selection sync); there is no host Package modal and no **`StyleCard presetName`** tile mode.
+
+**Forge script outputs:** `StyleGridScript.ui()` creates `style_grid_data_*` (JS bootstrap JSON) and `style_grid_source_*`, and returns **`[source_filter]`**. In `process(*args)`, `args[0]` is the active source filter (empty string = All Sources) used to scope `{sg:...}` wildcard pools — paths compared via `normalize_source_path`. Wildcard resolution still runs over `p.all_prompts` / `p.all_negative_prompts` from the pipeline, not over hidden textbox values.
+
+**CSV / samples:** `samples/` is read-only for save/delete (**403**). Basename resolve prefers writable CSVs over the demo pack (`is_samples_source`, `_resolve_target_csv_path`).
+
+A full-screen CSV table editor was prototyped and later removed; edit styles via the per-style editor or CSV on disk.
+
+**DOM:** `qs(sel, root?)` queries from `root` when provided, otherwise falls back to `gradioApp()` when available.
+
+## Data and Persistence
+
+User data root: `resolve_user_data_dir()` → `<shared.cmd_opts.data_path>/style_grid`, with fallback to `<extension>/data` when the host API is missing. Legacy `<extension>/data/` is copied once (never deleted); `usage.json` is skipped.
+
+- `presets.json`: presets storage.
+- `category_order.json`: backend-persisted category order.
+- `favorites.json` / `recent.json`: server-side favorites / recent.
+- `thumbnails/`: thumbnail files (CSV styles).
+- `backups/`: CSV backups.
+- `lora_titles.json`: CivitAI title cache keyed by `modelId` (created on first successful/failed fetch).
+- `config/lora_roots.json`: optional user LoRA roots (gitignored; see `.example`) — still under the extension folder.
+
+Client-side localStorage keys are also used for UI state (`favorites` / `recent` as name+source composite keys, per-tab source filter, collapsed categories, etc.).
+
+## Persistence (presets / CSV)
+
+- `safe_persistence.load_json_object(..., require_object_values=True)` treats wrong-shape maps (non-object values) as `CorruptDataError`, same as parse failure.
+- `load_presets` never writes. Legacy preset shapes are normalized only in memory; persist via `save_presets`.
+- Per-file reentrant locks (`locked_path`) wrap load→modify→save for presets and CSV CRUD. Route RMW holds the presets lock across both calls.
+- Atomic writes rotate `.bak` / `.bak.2` / `.bak.3`. Keep the three repo copies of `safe_persistence.py` byte-identical.
+
+## Write-route / Gradio auth
+
+`install_write_auth(app)` (from `register_api`) installs HTTP middleware:
+
+| Condition | Behavior |
+|-----------|----------|
+| Mutating POST/PUT/PATCH | `Content-Type` must include `application/json` (**403** otherwise) |
+| Localhost-only bind | `Host` must be `localhost` / `127.0.0.1` / `[::1]` with the server port (**403** on DNS-rebinding Host) |
+| `--listen` / `--share` / ngrok | Require `X-StyleGrid-Token` matching the per-session token embedded in `GET /style_grid/ui` HTML |
+| `--gradio-auth` | `GET /style_grid/ui` and mutating routes require a valid Gradio session cookie (lookup in `app.tokens`); anonymous → **401** |
+| `--share` without `--gradio-auth` | Warning logged: share link holders can read the write token |
+
+HTTP coverage: `tests/test_write_auth.py` (includes Gradio-compatible `/login` shim).
+
+## Testing
+
+| Layer | How |
+|-------|-----|
+| **Python** | `python scripts/run_pytest_min.py` — CSV I/O, HTTP routes, `{sg:…}` / `select_slice`, slice-grammar parity (`tests/README.md`). Root `npm test` runs this suite (fails if pass count drops below a pinned minimum). `tests/test_write_auth.py` covers CSRF / Host / Gradio session gates. |
+| **JS prompt helpers** | Serve `tests/test_js.html` (ES module). Covers brace-aware `splitTopLevelCommas` via `prompt-utils-bridge.js`. |
+| **UI unit / parity** | `cd ui && npm test` (Vitest 5; pinned minimum pass count). `wildcardSlice.test.ts` + `wildcardSlice.parity.test.ts` (shared `tests/fixtures/slice_grammar.json`). Typecheck: `npx tsc --noEmit -p tsconfig.app.json` and `-p tsconfig.test.json`. |
+| **UI lint** | Included in root `npm run lint` via `lint:ui` (`npm --prefix ui run lint`). |
+
+### Quality gate (pre-push)
+
+No GitHub Actions CI. After clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+`pre-push` runs an EOL guard (`git ls-files --eol` must not show `i/crlf` / `w/crlf`; no CR bytes in committed `ui/dist`), root lint, pytest (min count), UI typecheck/lint/vitest, then rebuilds the UI and requires `git diff --exit-code -- ui/dist` (committed bundle matches a clean build). A failing gate aborts the push.
+
+Gaps worth knowing: host `javascript/style_grid.mjs` iframe lifecycle and most React UI flows are still manual QA (no e2e). Slice helpers are covered by unit + Python/Vitest parity; keep `resolveSliceNames` aligned with `select_slice` when the grammar changes.
+
+## Practical Notes
+
+- Keep **`selectFilteredStyles`** (grid) and host-side style payload behavior aligned. If host dedups too early, source-aware UI features (like source picker on dedup cards) cannot work correctly.
+- Category ordering logic should remain source-aware: All Sources behavior and specific-source behavior are intentionally different.
+- When changing bridge messages, update both `ui/src/bridge.ts` and host `window.addEventListener("message", ...)` handlers (both iframe instances).

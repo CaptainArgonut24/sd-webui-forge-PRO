@@ -1,0 +1,245 @@
+/* =========================================================================
+   Style Grid v2.0 - CSS (host overlays + trigger; v1 panel rules removed)
+   ========================================================================= */
+
+/* ---- Trigger Button ---- */
+.sg-trigger-btn {
+    flex: 0 0 auto !important;
+    min-width: 42px !important;
+    width: 42px !important;
+    height: 36px !important;
+    padding: 8px 16px !important;
+    margin: 0 !important;
+    align-self: center !important;
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-color-primary, #374151);
+    border-radius: 6px;
+    background: var(--button-secondary-background-fill, #1f2937);
+    color: var(--body-text-color, #d1d5db);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    box-sizing: border-box;
+}
+/* Forge / A1111 / Reforge top toolbars — keep row alignment when host differs */
+.forge-toolbar-container > .sg-trigger-btn,
+.forge-toolbar-container .sg-trigger-btn,
+#quicksettings > .sg-trigger-btn,
+#quicksettings .sg-trigger-btn,
+.gradio-container .top-row > .sg-trigger-btn,
+.gradio-container .top-row .sg-trigger-btn {
+    align-self: center !important;
+    margin-inline: 3px !important;
+}
+.sg-trigger-btn.sg-trigger-btn--toolbar-host {
+    margin-inline: 3px !important;
+}
+.sg-trigger-btn:hover {
+    background: var(--button-secondary-background-fill-hover, #374151);
+    border-color: var(--color-accent, #6366f1);
+    color: #fff;
+}
+.sg-trigger-btn svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+.sg-btn-badge {
+    position: absolute;
+    top: -5px; right: -5px;
+    min-width: 16px; height: 16px;
+    padding: 0 4px;
+    border-radius: 8px;
+    background: #6366f1;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    pointer-events: none;
+}
+
+/* ---- Buttons (editor / presets / batch overlays) ---- */
+.sg-btn {
+    padding: 5px 10px;
+    border: 1px solid var(--border-color-primary, #374151);
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.sg-btn-primary { background: #6366f1; border-color: #6366f1; color: #fff; }
+.sg-btn-primary:hover { background: #4f46e5; }
+.sg-btn-secondary { background: var(--button-secondary-background-fill, #1f2937); color: var(--body-text-color, #d1d5db); }
+.sg-btn-secondary:hover { background: var(--button-secondary-background-fill-hover, #374151); }
+.sg-btn-danger { background: #dc2626; border-color: #dc2626; color: #fff; }
+.sg-btn-danger:hover { background: #b91c1c; border-color: #b91c1c; color: #fff; }
+
+@keyframes sg-fade-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+
+/* ---- Editor Modal ---- */
+.sg-editor-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 10003;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: sg-fade-in 0.15s ease;
+}
+.sg-editor-modal {
+    background: var(--body-background-fill, #0b0f19);
+    border: 1px solid var(--border-color-primary, #374151);
+    border-radius: 12px;
+    padding: 20px 24px;
+    min-width: 400px;
+    max-width: 600px;
+    max-height: 80vh;
+    overflow-y: auto;
+    box-shadow: 0 25px 60px rgba(0, 0, 0, 0.5);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.sg-editor-title {
+    margin: 0 0 4px 0;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--body-text-color, #f3f4f6);
+}
+.sg-editor-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--body-text-color-subdued, #9ca3af);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+.sg-editor-input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--border-color-primary, #374151);
+    border-radius: 6px;
+    background: var(--input-background-fill, #111827);
+    color: var(--body-text-color, #ffffff);
+    font-size: 13px;
+    outline: none;
+    box-sizing: border-box;
+}
+.sg-editor-input:focus { border-color: var(--color-accent, #6366f1); }
+.sg-editor-modal:focus { outline: none; }
+.sg-editor-overlay .sg-btn:focus-visible {
+    outline: 2px solid var(--color-accent, #6366f1);
+    outline-offset: 2px;
+}
+.sg-editor-textarea {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--border-color-primary, #374151);
+    border-radius: 6px;
+    background: var(--input-background-fill, #111827);
+    color: var(--body-text-color, #ffffff);
+    font-size: 13px;
+    outline: none;
+    resize: vertical;
+    font-family: monospace;
+    box-sizing: border-box;
+}
+.sg-editor-textarea:focus { border-color: var(--color-accent, #6366f1); }
+.sg-editor-btns { display: flex; gap: 8px; margin-top: 6px; }
+.sg-editor-text-subdued {
+    font-size: 13px;
+    color: var(--body-text-color-subdued, #9ca3af);
+}
+.sg-editor-error {
+    margin: 0;
+    font-size: 13px;
+    color: var(--error-text-color, #f87171);
+}
+
+/* ---- Presets ---- */
+.sg-presets-save-row { display: flex; gap: 8px; align-items: center; }
+.sg-presets-save-row .sg-editor-input { flex: 1; }
+.sg-presets-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; max-height: 300px; overflow-y: auto; }
+.sg-preset-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border-color-primary, #374151); border-radius: 6px; background: var(--background-fill-secondary, #1f2937); }
+.sg-preset-name { flex: 1; font-size: 13px; color: var(--body-text-color, #d1d5db); }
+.sg-preset-empty { text-align: center; color: var(--body-text-color-subdued, #6b7280); font-size: 13px; padding: 16px 0; }
+
+/* ---- Responsive ---- */
+@media (max-width: 768px) {
+    .sg-editor-modal { min-width: 90vw; }
+}
+
+/* ---- Light theme (live overlays only) ---- */
+.gradio-container.light .sg-editor-modal, .light .sg-editor-modal { background: #fff; }
+.gradio-container.light .sg-editor-input, .light .sg-editor-input { background: #fff; border-color: #d1d5db; color: #111827; }
+.gradio-container.light .sg-editor-textarea, .light .sg-editor-textarea { background: #fff; border-color: #d1d5db; color: #111827; }
+
+/* ---- Source Picker (still referenced by host outside-click closest()) ---- */
+.sg-source-picker {
+    background: var(--body-background-fill, #0b0f19);
+    border: 1px solid var(--border-color-primary, #374151);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+    min-width: 220px;
+    max-width: 320px;
+    padding: 6px 0;
+    animation: sg-fade-in 0.1s ease;
+}
+.sg-source-picker-title {
+    padding: 6px 12px 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--body-text-color-subdued, #9ca3af);
+    border-bottom: 1px solid var(--border-color-primary, #374151);
+    margin-bottom: 2px;
+}
+.sg-source-picker-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 7px 12px;
+    cursor: pointer;
+    transition: background 0.1s;
+}
+.sg-source-picker-row:hover {
+    background: var(--button-secondary-background-fill-hover, #374151);
+}
+.sg-source-picker-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--body-text-color, #d1d5db);
+}
+.sg-source-picker-preview {
+    font-size: 10px;
+    color: var(--body-text-color-subdued, #6b7280);
+    font-family: monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ---- Batch thumbnail generation modal ---- */
+.sg-batch-progress-text {
+    font-size: 13px;
+    color: var(--body-text-color, #d1d5db);
+    margin: 8px 0;
+}
+.sg-batch-bar-wrap {
+    height: 6px;
+    background: var(--background-fill-secondary, #1f2937);
+    border-radius: 3px;
+    overflow: hidden;
+    margin: 8px 0 12px;
+}
+.sg-batch-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--color-accent, #6366f1);
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
