@@ -886,6 +886,22 @@ def create_ui():
         shared.tab_names.append(label)
 
     with gr.Blocks(theme=shared.gradio_theme, analytics_enabled=False, title="Stable Diffusion", head=canvas_head) as demo:
+        with gr.Row(elem_id="forge_app_header"):
+            gr.HTML("""
+<div class="forge-brand">
+    <span class="forge-brand-mark" aria-hidden="true">F</span>
+    <div>
+        <div class="forge-brand-name">Forge Studio</div>
+        <div class="forge-brand-caption">AI image workspace</div>
+    </div>
+</div>
+                """)
+            gr.HTML("""
+<button id="forge_theme_toggle" type="button" onclick="toggle_theme()" aria-label="Toggle light and dark appearance">
+    <span aria-hidden="true">◐</span> Appearance
+</button>
+                """)
+
         settings.add_quicksettings()
 
         parameters_copypaste.connect_paste_params_buttons()

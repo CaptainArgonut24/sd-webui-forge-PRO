@@ -1862,36 +1862,156 @@ div.xyz_entries button.secondary {
 /* Refined application chrome */
 
 :root {
-    --forge-ui-radius: 12px;
-    --forge-ui-radius-small: 9px;
-    --forge-ui-accent: #5278e8;
+    color-scheme: light;
+    --forge-ui-radius: 14px;
+    --forge-ui-radius-small: 10px;
+    --forge-ui-accent: #536fe5;
+    --body-background-fill: #f3f5f9;
+    --background-fill-primary: #ffffff;
+    --background-fill-secondary: #f7f8fc;
+    --block-background-fill: #ffffff;
+    --block-border-color: #e2e6ef;
+    --border-color-primary: #e2e6ef;
+    --input-background-fill: #ffffff;
+    --input-border-color: #d7dce7;
+    --body-text-color: #20283a;
+    --block-title-text-color: #48536a;
+    --button-primary-background-fill: #536fe5;
+    --button-primary-background-fill-hover: #425fce;
+    --button-primary-text-color: #ffffff;
+    --button-primary-border-color: #536fe5;
 }
 
 .dark {
-    --forge-ui-accent: #86a4ff;
+    color-scheme: dark;
+    --forge-ui-accent: #91a8ff;
+    --body-background-fill: #10131b;
+    --background-fill-primary: #191e29;
+    --background-fill-secondary: #141923;
+    --block-background-fill: #191e29;
+    --block-border-color: #2a3241;
+    --border-color-primary: #2a3241;
+    --input-background-fill: #121721;
+    --input-border-color: #343d4e;
+    --body-text-color: #e7eaf2;
+    --block-title-text-color: #b6bfd0;
+    --button-primary-background-fill: #647fe9;
+    --button-primary-background-fill-hover: #7890f0;
+    --button-primary-text-color: #ffffff;
+    --button-primary-border-color: #647fe9;
 }
 
 body {
-    background: var(--background-fill-secondary);
+    background: var(--body-background-fill);
 }
 
 div.gradio-container {
-    padding: clamp(12px, 2vw, 28px) !important;
+    max-width: 1800px !important;
+    margin: 0 auto;
+    padding: 18px clamp(12px, 2vw, 30px) 28px !important;
+}
+
+#forge_app_header {
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin: 0 0 1rem;
+    padding: 0.4rem 0 1rem;
+    border-bottom: 1px solid var(--border-color-primary);
+}
+
+#forge_app_header > .gradio-html {
+    width: auto;
+    min-width: 0;
+}
+
+.forge-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+}
+
+.forge-brand-mark {
+    display: grid;
+    width: 2.65rem;
+    height: 2.65rem;
+    place-items: center;
+    border-radius: 12px;
+    background: linear-gradient(145deg, #7189f2, #495fc8);
+    color: #fff;
+    font-size: 1.25rem;
+    font-weight: 750;
+    box-shadow: 0 5px 16px rgba(67, 91, 190, 0.25);
+}
+
+.forge-brand-name {
+    color: var(--body-text-color);
+    font-size: 1.05rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+}
+
+.forge-brand-caption {
+    margin-top: 0.1rem;
+    color: var(--block-title-text-color);
+    font-size: 0.78rem;
+}
+
+#forge_theme_toggle {
+    min-height: 2.5rem;
+    padding: 0.5rem 0.85rem;
+    border: 1px solid var(--border-color-primary);
+    border-radius: var(--forge-ui-radius-small);
+    background: var(--background-fill-primary);
+    color: var(--body-text-color);
+    font: inherit;
+    font-size: 0.86rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 140ms ease, background-color 140ms ease, transform 140ms ease;
+}
+
+#forge_theme_toggle:hover {
+    border-color: var(--forge-ui-accent);
+    transform: translateY(-1px);
+}
+
+#forge_theme_toggle:focus-visible {
+    outline: 2px solid var(--forge-ui-accent);
+    outline-offset: 3px;
+}
+
+#quicksettings {
+    gap: 0.8rem 1rem;
+    margin: 0 0 1rem;
+    padding: 0.85rem 1rem;
+    border: 1px solid var(--border-color-primary);
+    border-radius: var(--forge-ui-radius);
+    background: var(--background-fill-primary);
+    box-shadow: 0 3px 12px rgba(26, 35, 55, 0.04);
+}
+
+#quicksettings > div {
+    align-self: center;
+}
+
+#quicksettings > button {
+    margin-top: 0.8rem;
 }
 
 #tabs {
-    gap: 1rem;
+    gap: 1.15rem;
 }
 
 #tabs > .tab-nav {
-    gap: 0.4rem;
-    padding: 0.35rem 0.35rem 0.75rem;
+    gap: 0.45rem;
+    padding: 0.25rem 0.2rem 0.85rem;
     border-bottom: 1px solid var(--border-color-primary);
 }
 
 #tabs > .tab-nav button {
-    min-height: 2.6rem;
-    padding: 0.55rem 1rem;
+    min-height: 2.65rem;
+    padding: 0.55rem 1.05rem;
     border: 1px solid transparent;
     border-radius: var(--forge-ui-radius-small) !important;
     font-weight: 600;
@@ -1907,7 +2027,41 @@ div.gradio-container {
     color: var(--forge-ui-accent);
     background: var(--background-fill-primary);
     border-color: var(--border-color-primary);
-    box-shadow: 0 2px 8px rgba(20, 32, 58, 0.08);
+    box-shadow: 0 3px 10px rgba(20, 32, 58, 0.07);
+}
+
+#tab_txt2img,
+#tab_img2img,
+#tab_extras,
+#tab_pnginfo,
+#tab_modelmerger,
+#tab_settings,
+#tab_extensions {
+    padding-top: 0.25rem;
+}
+
+#txt2img_settings,
+#img2img_settings {
+    gap: 0.85rem;
+    padding: 1.15rem !important;
+    border: 1px solid var(--border-color-primary);
+    border-radius: var(--forge-ui-radius);
+    background: var(--background-fill-primary) !important;
+    box-shadow: 0 5px 18px rgba(24, 34, 54, 0.045);
+}
+
+#txt2img_results_panel,
+#img2img_results_panel {
+    border: 1px solid var(--border-color-primary);
+    border-radius: var(--forge-ui-radius);
+    background: var(--background-fill-primary);
+    box-shadow: 0 5px 18px rgba(24, 34, 54, 0.045);
+    overflow: hidden;
+}
+
+#txt2img_results_panel > *,
+#img2img_results_panel > * {
+    border-radius: inherit;
 }
 
 .gradio-container button,
@@ -1957,7 +2111,8 @@ div.gradio-container {
 .gradio-container .gradio-accordion {
     border-color: var(--border-color-primary) !important;
     border-radius: var(--forge-ui-radius) !important;
-    box-shadow: 0 1px 3px rgba(20, 32, 58, 0.04);
+    background: var(--background-fill-primary);
+    box-shadow: 0 1px 3px rgba(20, 32, 58, 0.035);
 }
 
 .gradio-container .gradio-accordion > .label-wrap {
@@ -1974,6 +2129,13 @@ div.gradio-container {
 .gradio-container button.primary:hover {
     filter: brightness(1.05);
     transform: translateY(-1px);
+}
+
+.gradio-container .gradio-button.primary,
+.gradio-container button.primary {
+    border-color: var(--button-primary-border-color);
+    background: var(--button-primary-background-fill);
+    color: var(--button-primary-text-color);
 }
 
 .gradio-container .gradio-gallery {
@@ -1994,7 +2156,15 @@ div.gradio-container {
 
 @media (max-width: 700px) {
     div.gradio-container {
-        padding: 10px !important;
+        padding: 10px 10px 20px !important;
+    }
+
+    #forge_app_header {
+        margin-bottom: 0.75rem;
+    }
+
+    #quicksettings {
+        padding: 0.7rem;
     }
 
     #tabs > .tab-nav {
@@ -2004,5 +2174,10 @@ div.gradio-container {
 
     #tabs > .tab-nav button {
         white-space: nowrap;
+    }
+
+    #txt2img_settings,
+    #img2img_settings {
+        padding: 0.75rem !important;
     }
 }

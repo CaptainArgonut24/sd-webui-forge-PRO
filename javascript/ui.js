@@ -1,10 +1,29 @@
 // various functions for interaction with ui.py not large enough to warrant putting them in separate files
 
 function set_theme(theme) {
-    const gradioURL = window.location.href;
-    if (!gradioURL.includes("?__theme=")) {
-        window.location.replace(gradioURL + "?__theme=" + theme);
+    const url = new URL(window.location.href);
+    const requestedTheme = url.searchParams.get("__theme");
+    const savedTheme = localStorage.getItem("forge-ui-theme");
+    const selectedTheme = ["dark", "light"].includes(requestedTheme)
+        ? requestedTheme
+        : ["dark", "light"].includes(savedTheme)
+          ? savedTheme
+          : ["dark", "light"].includes(theme)
+            ? theme
+            : "dark";
+    if (url.searchParams.get("__theme") !== selectedTheme) {
+        url.searchParams.set("__theme", selectedTheme);
+        window.location.replace(url.toString());
     }
+}
+
+function toggle_theme() {
+    const url = new URL(window.location.href);
+    const currentTheme = url.searchParams.get("__theme") || localStorage.getItem("forge-ui-theme") || "dark";
+    const nextTheme = currentTheme === "dark" ? "light" : "dark";
+    localStorage.setItem("forge-ui-theme", nextTheme);
+    url.searchParams.set("__theme", nextTheme);
+    window.location.replace(url.toString());
 }
 
 function all_gallery_buttons() {
