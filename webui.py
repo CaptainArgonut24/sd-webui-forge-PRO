@@ -80,6 +80,8 @@ def webui_worker():
     )
 
     while 1:
+        initialize_util.gradio_server_name()
+
         if shared.opts.clean_temp_dir_at_start:
             ui_tempdir.cleanup_tmpdr()
             startup_timer.record("cleanup temp dir")

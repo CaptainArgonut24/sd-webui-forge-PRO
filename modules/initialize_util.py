@@ -10,12 +10,27 @@ from modules.timer import startup_timer
 
 
 def gradio_server_name():
+    import ipaddress
+
+    from modules import shared
     from modules.shared_cmd_options import cmd_opts
+
+    listen = cmd_opts.listen or shared.opts.listen_on_local_network
+    server_name_is_loopback = cmd_opts.server_name in ("localhost",)
+    if cmd_opts.server_name:
+        try:
+            server_name_is_loopback = ipaddress.ip_address(cmd_opts.server_name).is_loopback
+        except ValueError:
+            pass
+
+    cmd_opts.network_listening = (listen and not cmd_opts.server_name) or bool(cmd_opts.server_name and not server_name_is_loopback)
+    cmd_opts.webui_is_non_local = any([cmd_opts.share, listen, cmd_opts.ngrok, cmd_opts.server_name])
+    cmd_opts.disable_extension_access = cmd_opts.webui_is_non_local and not cmd_opts.enable_insecure_extension_access
 
     if cmd_opts.server_name:
         return cmd_opts.server_name
     else:
-        return "0.0.0.0" if cmd_opts.listen else None
+        return "0.0.0.0" if listen else None
 
 
 def fix_torch_version():

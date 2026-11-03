@@ -1858,3 +1858,151 @@ div.xyz_entries button.secondary {
 #swap_axes button {
     border-radius: 8px;
 }
+
+/* Refined application chrome */
+
+:root {
+    --forge-ui-radius: 12px;
+    --forge-ui-radius-small: 9px;
+    --forge-ui-accent: #5278e8;
+}
+
+.dark {
+    --forge-ui-accent: #86a4ff;
+}
+
+body {
+    background: var(--background-fill-secondary);
+}
+
+div.gradio-container {
+    padding: clamp(12px, 2vw, 28px) !important;
+}
+
+#tabs {
+    gap: 1rem;
+}
+
+#tabs > .tab-nav {
+    gap: 0.4rem;
+    padding: 0.35rem 0.35rem 0.75rem;
+    border-bottom: 1px solid var(--border-color-primary);
+}
+
+#tabs > .tab-nav button {
+    min-height: 2.6rem;
+    padding: 0.55rem 1rem;
+    border: 1px solid transparent;
+    border-radius: var(--forge-ui-radius-small) !important;
+    font-weight: 600;
+    transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+#tabs > .tab-nav button:hover {
+    background: var(--background-fill-secondary);
+    border-color: var(--border-color-primary);
+}
+
+#tabs > .tab-nav button.selected {
+    color: var(--forge-ui-accent);
+    background: var(--background-fill-primary);
+    border-color: var(--border-color-primary);
+    box-shadow: 0 2px 8px rgba(20, 32, 58, 0.08);
+}
+
+.gradio-container button,
+.gradio-container input,
+.gradio-container textarea,
+.gradio-container select {
+    transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
+}
+
+.gradio-container button {
+    border-radius: var(--forge-ui-radius-small);
+}
+
+.gradio-container button:focus-visible,
+.gradio-container input:focus-visible,
+.gradio-container textarea:focus-visible,
+.gradio-container select:focus-visible {
+    outline: 2px solid var(--forge-ui-accent) !important;
+    outline-offset: 2px;
+}
+
+.gradio-container .gradio-textbox textarea,
+.gradio-container .gradio-textbox input,
+.gradio-container .gradio-number input,
+.gradio-container .gradio-dropdown .wrap,
+.gradio-container .gradio-colorpicker .wrap {
+    border-radius: var(--forge-ui-radius-small) !important;
+}
+
+.gradio-container .gradio-textbox textarea:focus,
+.gradio-container .gradio-textbox input:focus,
+.gradio-container .gradio-number input:focus,
+.gradio-container .gradio-dropdown .wrap:focus-within,
+.gradio-container .gradio-colorpicker .wrap:focus-within {
+    border-color: var(--forge-ui-accent) !important;
+    box-shadow: 0 0 0 3px rgba(82, 120, 232, 0.16) !important;
+}
+
+.dark .gradio-container .gradio-textbox textarea:focus,
+.dark .gradio-container .gradio-textbox input:focus,
+.dark .gradio-container .gradio-number input:focus,
+.dark .gradio-container .gradio-dropdown .wrap:focus-within,
+.dark .gradio-container .gradio-colorpicker .wrap:focus-within {
+    box-shadow: 0 0 0 3px rgba(134, 164, 255, 0.2) !important;
+}
+
+.gradio-container .gradio-accordion {
+    border-color: var(--border-color-primary) !important;
+    border-radius: var(--forge-ui-radius) !important;
+    box-shadow: 0 1px 3px rgba(20, 32, 58, 0.04);
+}
+
+.gradio-container .gradio-accordion > .label-wrap {
+    min-height: 2.6rem;
+}
+
+.gradio-container .gradio-button.primary,
+.gradio-container button.primary {
+    font-weight: 650;
+    box-shadow: 0 2px 6px rgba(20, 32, 58, 0.12);
+}
+
+.gradio-container .gradio-button.primary:hover,
+.gradio-container button.primary:hover {
+    filter: brightness(1.05);
+    transform: translateY(-1px);
+}
+
+.gradio-container .gradio-gallery {
+    border-radius: var(--forge-ui-radius);
+    overflow: hidden;
+}
+
+#settings > div.tab-nav button {
+    border-radius: var(--forge-ui-radius-small) !important;
+    padding: 0.55rem 0.75rem;
+    text-decoration: none;
+}
+
+#settings > div.tab-nav button.selected {
+    color: var(--forge-ui-accent);
+    background: var(--background-fill-secondary);
+}
+
+@media (max-width: 700px) {
+    div.gradio-container {
+        padding: 10px !important;
+    }
+
+    #tabs > .tab-nav {
+        overflow-x: auto;
+        flex-wrap: nowrap;
+    }
+
+    #tabs > .tab-nav button {
+        white-space: nowrap;
+    }
+}

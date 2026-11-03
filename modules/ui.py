@@ -962,7 +962,50 @@ checkpoint: <a id="sd_checkpoint_hash">N/A</a>
 
 
 def setup_ui_api(app):
+    import html
+    import ipaddress
+    import socket
+
+    from fastapi import Request
+    from fastapi.responses import HTMLResponse
     from pydantic import BaseModel, Field
+
+    def network_links(request: Request):
+        if not getattr(cmd_opts, "network_listening", False):
+            return HTMLResponse(
+                "<h1>Local network access is not active</h1><p>Enable the setting in Settings &gt; System, save it, and select Reload UI.</p>",
+                status_code=409,
+            )
+
+        addresses = set()
+        try:
+            for result in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET, socket.SOCK_STREAM):
+                address = ipaddress.ip_address(result[4][0])
+                if address.is_private and not address.is_loopback and not address.is_link_local:
+                    addresses.add(str(address))
+        except socket.gaierror:
+            pass
+
+        if not addresses:
+            return HTMLResponse(
+                "<h1>No local network addresses found</h1><p>Check that this computer is connected to your local network.</p>",
+                status_code=503,
+            )
+
+        port = request.url.port
+        port_part = f":{port}" if port is not None else ""
+        root_path = request.scope.get("root_path", "").rstrip("/")
+        if not root_path and cmd_opts.subpath:
+            root_path = f"/{cmd_opts.subpath.strip('/')}"
+
+        links = "".join(
+            f'<li><a href="{html.escape(request.url.scheme)}://{html.escape(address)}{port_part}{html.escape(root_path)}/">'
+            f'{html.escape(request.url.scheme)}://{html.escape(address)}{port_part}{html.escape(root_path)}/</a></li>'
+            for address in sorted(addresses)
+        )
+        return HTMLResponse(f"<h1>Open this Web UI on another device</h1><ul>{links}</ul>")
+
+    app.add_api_route("/internal/network-links", network_links, methods=["GET"], response_class=HTMLResponse)
 
     class QuicksettingsHint(BaseModel):
         name: str = Field(title="Name of the quicksettings field")
