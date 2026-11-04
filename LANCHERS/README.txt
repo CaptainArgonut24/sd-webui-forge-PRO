@@ -11,6 +11,8 @@ Forge client launchers
    all the ForgeCompanion runtime files and folders beside this executable.
    Enter the server PC URL shown in Forge Settings > Network, then click
    Connect. Example: http://192.168.1.25:7860
+   The connection settings collapse to a compact server bar after connecting.
+   Click "Change server" to reopen them.
    Windows also needs the .NET 10 Desktop Runtime and Microsoft Edge WebView2
    Runtime installed.
 

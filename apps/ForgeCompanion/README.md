@@ -58,6 +58,8 @@ Compress-Archive -Path .\apps\ForgeCompanion\artifacts\windows\* `
 Extract the zip and run `ForgeCompanion.exe`. It opens the local server URL by
 default; enter another server URL if needed. Install the .NET 10 Desktop and
 Microsoft Edge WebView2 runtimes if they are not already present.
+The server connection controls collapse after connecting; use **Change server**
+to reopen them. The app remembers the expanded/collapsed choice.
 
 ## 3. Android Front End
 

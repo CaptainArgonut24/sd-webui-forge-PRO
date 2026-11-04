@@ -7,3 +7,32 @@
 2026-11-04 00:21:31.815: [INFO] BookmarksLoadDropped droppedNodes=0
 2026-11-04 00:21:31.815: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
 2026-11-04 00:21:41.519: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-11-04 00:39:01.671: [INFO] CurrentProfilePath: C:\Users\johnh\Documents\GitHubDesktop\sd-webui-forge-PRO\LANCHERS\windows.exe.WebView2\EBWebView\Default
+2026-11-04 00:39:01.671: [INFO] Profiles total count: 1
+2026-11-04 00:39:01.671: [INFO] Profile: name=Profile 1 path=C:\Users\johnh\Documents\GitHubDesktop\sd-webui-forge-PRO\LANCHERS\windows.exe.WebView2\EBWebView\Default lastActive=null
+2026-11-04 00:39:01.671: [INFO] LastUsedProfileDir: C:\Users\johnh\Documents\GitHubDesktop\sd-webui-forge-PRO\LANCHERS\windows.exe.WebView2\EBWebView\Default
+2026-11-04 00:39:01.671: [INFO] OnDoneLoading sync enabled: 0
+2026-11-04 00:39:01.671: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-11-04 00:39:01.671: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-11-04 00:39:01.671: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-11-04 00:40:00.815: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-11-04 00:40:10.921: [INFO] CurrentProfilePath: C:\Users\johnh\Documents\GitHubDesktop\sd-webui-forge-PRO\LANCHERS\windows.exe.WebView2\EBWebView\Default
+2026-11-04 00:40:10.921: [INFO] Profiles total count: 1
+2026-11-04 00:40:10.921: [INFO] Profile: name=Profile 1 path=C:\Users\johnh\Documents\GitHubDesktop\sd-webui-forge-PRO\LANCHERS\windows.exe.WebView2\EBWebView\Default lastActive=2026-11-04T00:39:54.397Z
+2026-11-04 00:40:10.921: [INFO] LastUsedProfileDir: C:\Users\johnh\Documents\GitHubDesktop\sd-webui-forge-PRO\LANCHERS\windows.exe.WebView2\EBWebView\Default
+2026-11-04 00:40:10.921: [INFO] MostRecentlyActiveProfile: name=Profile 1 path=C:\Users\johnh\Documents\GitHubDesktop\sd-webui-forge-PRO\LANCHERS\windows.exe.WebView2\EBWebView\Default lastActive=2026-11-04T00:39:54.397Z
+2026-11-04 00:40:10.921: [INFO] OnDoneLoading sync enabled: 0
+2026-11-04 00:40:10.921: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-11-04 00:40:10.921: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-11-04 00:40:10.921: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-11-04 00:41:52.148: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-11-04 00:45:36.568: [INFO] CurrentProfilePath: C:\Users\johnh\Documents\GitHubDesktop\sd-webui-forge-PRO\LANCHERS\windows.exe.WebView2\EBWebView\Default
+2026-11-04 00:45:36.568: [INFO] Profiles total count: 1
+2026-11-04 00:45:36.568: [INFO] Profile: name=Profile 1 path=C:\Users\johnh\Documents\GitHubDesktop\sd-webui-forge-PRO\LANCHERS\windows.exe.WebView2\EBWebView\Default lastActive=2026-11-04T00:39:54.397Z
+2026-11-04 00:45:36.568: [INFO] LastUsedProfileDir: C:\Users\johnh\Documents\GitHubDesktop\sd-webui-forge-PRO\LANCHERS\windows.exe.WebView2\EBWebView\Default
+2026-11-04 00:45:36.568: [INFO] MostRecentlyActiveProfile: name=Profile 1 path=C:\Users\johnh\Documents\GitHubDesktop\sd-webui-forge-PRO\LANCHERS\windows.exe.WebView2\EBWebView\Default lastActive=2026-11-04T00:39:54.397Z
+2026-11-04 00:45:36.568: [INFO] OnDoneLoading sync enabled: 0
+2026-11-04 00:45:36.568: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-11-04 00:45:36.568: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-11-04 00:45:36.568: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-11-04 00:48:35.180: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
