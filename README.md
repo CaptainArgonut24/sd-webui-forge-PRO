@@ -399,6 +399,7 @@ installation; clients connect to that shared server. See
 
 3. **(Optional)** Configure [Commandline](#commandline)
 4. Launch the WebUI via `webui-user.bat`
+    - This checkout's launcher uses `D:\StabilityMatrix\Models` as the shared model folder and preserves other launch arguments; change `COMMANDLINE_ARGS` in `webui-user.bat` if your Stability Matrix library is elsewhere.
 5. During the first launch, it will automatically install all the requirements
 6. Once the installation is finished, the WebUI will start in a browser automatically
 

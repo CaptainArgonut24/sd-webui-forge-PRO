@@ -31,6 +31,20 @@ models into the executable**. Start the server:
 .\ForgeServer.exe --forge-dir "C:\path\to\sd-webui-forge-PRO"
 ```
 
+To use a shared Stability Matrix model library, pass its `Models` folder as
+Forge's model root:
+
+```powershell
+.\ForgeServer.exe --forge-dir "D:\StabilityMatrix\Packages\Stable Diffusion WebUI Forge - Neo" `
+  --model-ref "D:\StabilityMatrix\Models"
+```
+
+For other launch methods, add `--model-ref "D:\StabilityMatrix\Models"` to
+Forge's command-line arguments (for example, in `webui-user.bat` as
+`COMMANDLINE_ARGS`). The external folder should have Forge's expected model
+subfolder layout. Without `--model-ref`, Forge continues to use the
+installation's own `models` folder.
+
 The launcher binds the server for Wi-Fi access on port `7860` and keeps the
 console open for server logs. Keep it open while using either front end. Use
 `--port 7861` to choose another port. If no `--forge-dir` is supplied, it

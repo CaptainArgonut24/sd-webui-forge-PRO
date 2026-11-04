@@ -14,7 +14,7 @@ internal static class Program
             return 0;
         }
 
-        if (!TryParseArguments(args, out var forgeDirectory, out var port, out var error))
+        if (!TryParseArguments(args, out var forgeDirectory, out var modelsDirectory, out var port, out var error))
         {
             Console.Error.WriteLine(error);
             PrintUsage();
@@ -40,7 +40,14 @@ internal static class Program
             return 2;
         }
 
-        var arguments = $"/d /c \"\"{batchFile}\" --listen --no-browser --port {port}\"";
+        if (modelsDirectory is not null && !Directory.Exists(modelsDirectory))
+        {
+            Console.Error.WriteLine($"The selected models folder does not exist: {modelsDirectory}");
+            return 2;
+        }
+
+        var modelsArgument = modelsDirectory is null ? string.Empty : $" --model-ref \"{modelsDirectory}\"";
+        var arguments = $"/d /c \"\"{batchFile}\" --listen --no-browser --port {port}{modelsArgument}\"";
         var startInfo = new ProcessStartInfo
         {
             FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
@@ -51,6 +58,10 @@ internal static class Program
         };
 
         Console.WriteLine($"Starting the Forge server from: {forgeDirectory}");
+        if (modelsDirectory is not null)
+        {
+            Console.WriteLine($"Using models from: {modelsDirectory}");
+        }
         Console.WriteLine($"Listening on the local network at port {port}.");
         Console.WriteLine("Keep this window open while Forge is in use. Press Ctrl+C to stop the server.");
 
@@ -81,10 +92,12 @@ internal static class Program
     private static bool TryParseArguments(
         string[] args,
         out string? forgeDirectory,
+        out string? modelsDirectory,
         out int port,
         out string? error)
     {
         forgeDirectory = null;
+        modelsDirectory = null;
         port = DefaultPort;
         error = null;
 
@@ -95,6 +108,9 @@ internal static class Program
                 case "--forge-dir" when index + 1 < args.Length:
                     forgeDirectory = Path.GetFullPath(args[++index]);
                     break;
+                case "--model-ref" when index + 1 < args.Length:
+                    modelsDirectory = Path.GetFullPath(args[++index]);
+                    break;
                 case "--port" when index + 1 < args.Length:
                     if (!int.TryParse(args[++index], out port) || port is < 1 or > 65535)
                     {
@@ -104,6 +120,7 @@ internal static class Program
 
                     break;
                 case "--forge-dir":
+                case "--model-ref":
                 case "--port":
                     error = $"Missing value for {args[index]}.";
                     return false;
@@ -143,8 +160,8 @@ internal static class Program
     private static void PrintUsage()
     {
         Console.WriteLine("Forge Server launcher");
-        Console.WriteLine("Usage: ForgeServer.exe [--forge-dir <path>] [--port <port>]");
+        Console.WriteLine("Usage: ForgeServer.exe [--forge-dir <path>] [--model-ref <models-folder>] [--port <port>]");
         Console.WriteLine($"Defaults: detect Forge from the current/parent folders; port {DefaultPort}.");
-        Console.WriteLine("The launcher uses the existing Forge Python environment and model files.");
+        Console.WriteLine("The launcher uses the existing Forge Python environment and model files. --model-ref overrides Forge's models folder.");
     }
 }
