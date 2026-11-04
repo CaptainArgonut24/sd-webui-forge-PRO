@@ -22,6 +22,15 @@ The name "Forge" is inspired by "Minecraft Forge". This project aims to become t
 
 <br>
 
+## Windows and Android Companion Apps
+
+This repository includes separate Windows Forge Server, Windows Front End, and
+Android Front End packages. The server launcher starts an existing Forge
+installation; clients connect to that shared server. See
+[Forge Companion](apps/ForgeCompanion/README.md) for build and setup instructions.
+
+<br>
+
 ## Features [Oct.]
 > Most base features of the original [Automatic1111 Webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) should still function
 

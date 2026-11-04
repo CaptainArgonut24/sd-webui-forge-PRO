@@ -98,7 +98,7 @@ def webui_worker():
         gradio_auth_creds = list(initialize_util.get_gradio_auth_creds()) or None
 
         auto_launch_browser = False
-        if os.getenv("SD_WEBUI_RESTARTING") != "1":
+        if not cmd_opts.no_browser and os.getenv("SD_WEBUI_RESTARTING") != "1":
             if shared.opts.auto_launch_browser == "Remote" or cmd_opts.autolaunch:
                 auto_launch_browser = True
             elif shared.opts.auto_launch_browser == "Local":

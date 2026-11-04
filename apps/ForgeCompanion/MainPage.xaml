@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="ForgeCompanion.MainPage"
+             Title="Forge Companion"
+             BackgroundColor="#0d1117">
+    <Grid RowDefinitions="Auto,Auto,*">
+        <Grid Grid.Row="0"
+              Padding="18,12"
+              RowDefinitions="Auto,Auto"
+              BackgroundColor="#111722">
+            <VerticalStackLayout Spacing="2">
+                <Label Text="FORGE COMPANION"
+                       FontSize="18"
+                       FontAttributes="Bold"
+                       TextColor="#f4f6fb" />
+                <Label Text="Open Forge in this app window"
+                       FontSize="12"
+                       TextColor="#9da8bb" />
+            </VerticalStackLayout>
+            <Label x:Name="StatusLabel"
+                   Grid.Row="1"
+                   Text="Not connected"
+                   FontSize="12"
+                   TextColor="#aab5c8"
+                   VerticalOptions="Center" />
+        </Grid>
+
+        <Grid Grid.Row="1"
+              Padding="14,10"
+              ColumnDefinitions="*,Auto,Auto"
+              RowDefinitions="Auto,Auto"
+              ColumnSpacing="8"
+              BackgroundColor="#151c28">
+            <Label Grid.ColumnSpan="3"
+                   Text="Enter the server PC's URL from Forge Settings > Network. For example: http://192.168.1.25:7860"
+                   FontSize="12"
+                   TextColor="#aab5c8" />
+            <Entry x:Name="ServerUrlEntry"
+                   Grid.Row="1"
+                   Placeholder="http://192.168.1.25:7860"
+                   Keyboard="Url"
+                   ReturnType="Go"
+                   Completed="OnConnectClicked"
+                   TextColor="#f4f6fb"
+                   PlaceholderColor="#7f8ba0"
+                   BackgroundColor="#0d1117" />
+            <Button Grid.Row="1"
+                    Grid.Column="1"
+                    Text="Connect"
+                    Clicked="OnConnectClicked"
+                    BackgroundColor="#6374e8"
+                    TextColor="White" />
+            <Button Grid.Row="1"
+                    Grid.Column="2"
+                    Text="Reload"
+                    Clicked="OnReloadClicked"
+                    BackgroundColor="#222c3b"
+                    TextColor="#e9edf5" />
+        </Grid>
+
+        <Grid Grid.Row="2" BackgroundColor="#0d1117">
+            <WebView x:Name="ForgeWebView"
+                     IsVisible="False"
+                     Navigated="OnWebViewNavigated"
+                     BackgroundColor="#0d1117" />
+            <VerticalStackLayout x:Name="EmptyStatePanel"
+                                 Padding="28"
+                                 Spacing="12"
+                                 HorizontalOptions="Center"
+                                 VerticalOptions="Center">
+                <Label Text="Your Forge workspace, in one app"
+                       FontSize="22"
+                       FontAttributes="Bold"
+                       TextColor="#f4f6fb"
+                       HorizontalTextAlignment="Center" />
+                <Label Text="Start the Forge Server on your Windows PC. To connect from Android, enter the PC's local network URL shown in Forge Settings > Network."
+                       FontSize="14"
+                       TextColor="#aab5c8"
+                       HorizontalTextAlignment="Center"
+                       MaximumWidthRequest="620" />
+            </VerticalStackLayout>
+        </Grid>
+    </Grid>
+</ContentPage>
