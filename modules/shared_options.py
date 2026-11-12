@@ -164,19 +164,8 @@ options_templates.update(
     options_section(
         ("network", "Network", "system"),
         {
-<<<<<<< HEAD
             "listen_on_network": OptionInfo(False, "Listen on local network", restrict_api=True).info("Allow other devices on your local network to access the Web UI; only enable on trusted networks").needs_restart(),
             "network_access_urls": OptionHTML("Network URLs will appear when the Web UI is ready."),
-=======
-            "network_access_explanation": OptionHTML("""
-<p>Local access URL</p>
-<p><a id="network_current_url_link" href="./"><code>Loading current URL...</code></a></p>
-<p>Use this address on the computer running Forge. To open Forge from another device on your local network, enable network access below, apply the setting, and select <b>Reload UI</b>.</p>
-<p><a href="./internal/network-links" target="_blank" rel="noopener">View URLs for devices on your local network</a></p>
-<p>Only enable network access on a trusted network. Configure <code>--gradio-auth</code> in your launch arguments if you need a username and password.</p>
-                """),
-            "listen_on_local_network": OptionInfo(False, "Allow access from other devices on my local network").needs_reload_ui(),
->>>>>>> 369483b92f8535620c7a54c48fdaa63cbb006d58
         },
     )
 )
