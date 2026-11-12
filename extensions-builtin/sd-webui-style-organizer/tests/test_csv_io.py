@@ -1,0 +1,364 @@
+"""
+Tests for stylegrid.csv_io parse/save/delete behavior.
+
+Duplicate names (save): save_style_to_csv updates every matching row by name in the
+target CSV (row count unchanged; see test_save_updates_all_duplicate_rows).
+"""
+import pytest
+
+from stylegrid import csv_io
+
+
+def test_parse_returns_expected_fields(tmp_csv):
+    styles = csv_io.parse_styles_csv(str(tmp_csv))
+    assert len(styles) == 3
+    by_name = {s["name"]: s for s in styles}
+    assert set(by_name["Test Style A"].keys()) >= {
+        "name",
+        "prompt",
+        "negative_prompt",
+        "description",
+        "category_explicit",
+        "source",
+        "_source",
+        "source_file",
+    }
+    assert by_name["Test Style A"]["source"] == by_name["Test Style A"]["_source"] == "styles.csv"
+    # CSV column "category" is stored as category_explicit; "category" is added by categorize_styles().
+    assert "category" not in by_name["Test Style A"]
+    assert by_name["Test Style A"]["category_explicit"] == "BASE"
+    assert by_name["Test Style B"]["category_explicit"] == "BODY"
+    assert by_name["Style With Spaces"]["category_explicit"] == ""
+
+
+def test_parse_empty_prompt_and_negative_are_empty_strings(tmp_csv):
+    styles = csv_io.parse_styles_csv(str(tmp_csv))
+    spaces = next(s for s in styles if s["name"] == "Style With Spaces")
+    b = next(s for s in styles if s["name"] == "Test Style B")
+    assert spaces["prompt"] == "tag_c"
+    assert spaces["negative_prompt"] == "bad_c"
+    assert spaces["description"] == ""
+    assert spaces["category_explicit"] == ""
+    assert b["negative_prompt"] == ""
+    assert isinstance(b["negative_prompt"], str)
+    assert isinstance(spaces["description"], str)
+
+
+def test_load_all_keeps_same_basename_in_different_dirs(tmp_path, monkeypatch):
+    """Two styles.csv in different scanned dirs must not collapse by name."""
+    d1 = tmp_path / "ext"
+    d2 = tmp_path / "root"
+    d1.mkdir()
+    d2.mkdir()
+    (d1 / "styles.csv").write_text(
+        "name,prompt,negative_prompt,description,category\n"
+        "SharedName,from_ext,,,\n",
+        encoding="utf-8",
+    )
+    (d2 / "styles.csv").write_text(
+        "name,prompt,negative_prompt,description,category\n"
+        "SharedName,from_root,,,\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        csv_io,
+        "get_all_styles_file_paths",
+        lambda: [str(d1 / "styles.csv"), str(d2 / "styles.csv")],
+    )
+    styles = csv_io.load_all_styles()
+    prompts = {s["prompt"] for s in styles if s["name"] == "SharedName"}
+    assert prompts == {"from_ext", "from_root"}
+    assert all(s.get("_source") == "styles.csv" for s in styles)
+
+
+def test_parse_row_count_matches_data_rows(tmp_path):
+    p = tmp_path / "x.csv"
+    p.write_text(
+        "name,prompt,negative_prompt,description,category\n"
+        "One,a,,,\n"
+        "Two,b,,,\n",
+        encoding="utf-8",
+    )
+    assert len(csv_io.parse_styles_csv(str(p))) == 2
+
+
+def test_parse_strips_name_whitespace(tmp_path):
+    p = tmp_path / "w.csv"
+    p.write_text(
+        "name,prompt,negative_prompt,description,category\n"
+        '  Trimmed Name  ,p,,,\n',
+        encoding="utf-8",
+    )
+    styles = csv_io.parse_styles_csv(str(p))
+    assert len(styles) == 1
+    assert styles[0]["name"] == "Trimmed Name"
+
+
+def test_parse_skips_empty_name_row(tmp_path):
+    p = tmp_path / "e.csv"
+    p.write_text(
+        "name,prompt,negative_prompt,description,category\n"
+        ",ghost,,,\n"
+        "Real,x,,,\n",
+        encoding="utf-8",
+    )
+    styles = csv_io.parse_styles_csv(str(p))
+    assert [s["name"] for s in styles] == ["Real"]
+
+
+def test_save_updates_existing_row_by_name(tmp_csv, patch_styles_dirs, monkeypatch):
+    monkeypatch.setattr(csv_io, "invalidate_styles_cache", lambda: None)
+    csv_io.save_style_to_csv(
+        "Test Style A",
+        "updated_prompt",
+        "updated_neg",
+        "updated_desc",
+        source_file="styles.csv",
+        category="NEWCAT",
+    )
+    styles = csv_io.parse_styles_csv(str(tmp_csv))
+    a = next(s for s in styles if s["name"] == "Test Style A")
+    assert a["prompt"] == "updated_prompt"
+    assert a["negative_prompt"] == "updated_neg"
+    assert a["description"] == "updated_desc"
+    assert a["category_explicit"] == "NEWCAT"
+
+
+def test_save_appends_new_name(tmp_csv, patch_styles_dirs, monkeypatch):
+    monkeypatch.setattr(csv_io, "invalidate_styles_cache", lambda: None)
+    csv_io.save_style_to_csv(
+        "Brand New",
+        "np",
+        "nn",
+        "nd",
+        source_file="styles.csv",
+        category="Z",
+    )
+    styles = csv_io.parse_styles_csv(str(tmp_csv))
+    assert len(styles) == 4
+    n = next(s for s in styles if s["name"] == "Brand New")
+    assert n["prompt"] == "np"
+    assert n["category_explicit"] == "Z"
+
+
+def test_save_does_not_corrupt_other_rows(tmp_csv, patch_styles_dirs, monkeypatch):
+    monkeypatch.setattr(csv_io, "invalidate_styles_cache", lambda: None)
+    before = {s["name"]: dict(s) for s in csv_io.parse_styles_csv(str(tmp_csv))}
+    csv_io.save_style_to_csv(
+        "Test Style A",
+        "only_a_changes",
+        "bad_tag_a",
+        "Desc A",
+        source_file="styles.csv",
+        category="BASE",
+    )
+    after = {s["name"]: dict(s) for s in csv_io.parse_styles_csv(str(tmp_csv))}
+    assert after["Test Style B"] == before["Test Style B"]
+    assert after["Style With Spaces"] == before["Style With Spaces"]
+    assert after["Test Style A"]["prompt"] == "only_a_changes"
+
+
+def test_delete_removes_row_by_name(tmp_csv, patch_styles_dirs, monkeypatch):
+    monkeypatch.setattr(csv_io, "invalidate_styles_cache", lambda: None)
+    before = len(csv_io.parse_styles_csv(str(tmp_csv)))
+    csv_io.delete_style_from_csv("Test Style B", source_file="styles.csv")
+    names = [s["name"] for s in csv_io.parse_styles_csv(str(tmp_csv))]
+    assert "Test Style B" not in names
+    assert len(names) == before - 1
+
+
+def test_delete_nonexistent_name_no_raise(tmp_csv, patch_styles_dirs, monkeypatch):
+    monkeypatch.setattr(csv_io, "invalidate_styles_cache", lambda: None)
+    before = csv_io.parse_styles_csv(str(tmp_csv))
+    # Implementation returns True and rewrites file with the same rows.
+    assert csv_io.delete_style_from_csv("No Such Style", source_file="styles.csv") is True
+    after = csv_io.parse_styles_csv(str(tmp_csv))
+    assert len(after) == len(before)
+    assert [s["name"] for s in after] == [s["name"] for s in before]
+
+
+def test_save_updates_all_duplicate_rows(tmp_path, monkeypatch):
+    monkeypatch.setattr(csv_io, "invalidate_styles_cache", lambda: None)
+    p = tmp_path / "styles.csv"
+    p.write_text(
+        "name,prompt,negative_prompt,description,category\n"
+        "Dup,old1,,,\n"
+        "Dup,old2,,,\n"
+        "Other,x,,,\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(csv_io, "get_all_styles_file_paths", lambda: [str(p)])
+    csv_io.save_style_to_csv(
+        "Dup",
+        "updated",
+        "",
+        "",
+        source_file="styles.csv",
+        category="",
+    )
+    styles = csv_io.parse_styles_csv(str(p))
+    dups = [s for s in styles if s["name"] == "Dup"]
+    assert len(dups) == 2
+    assert dups[0]["prompt"] == "updated"
+    assert dups[1]["prompt"] == "updated"
+    assert len(styles) == 3
+
+
+# --- rename_style_in_csv (documented semantics) ---
+
+
+def test_rename_changes_target_row_leaves_others_intact(tmp_csv, patch_styles_dirs, monkeypatch):
+    monkeypatch.setattr(csv_io, "invalidate_styles_cache", lambda: None)
+    before = {s["name"]: dict(s) for s in csv_io.parse_styles_csv(str(tmp_csv))}
+    assert csv_io.rename_style_in_csv(
+        "Test Style B", "Renamed B", source_file="styles.csv"
+    ) is True
+    after = {s["name"]: dict(s) for s in csv_io.parse_styles_csv(str(tmp_csv))}
+    assert "Test Style B" not in after
+    assert "Renamed B" in after
+    # Other rows untouched (parsed fields; source_file paths stay stable).
+    assert after["Test Style A"] == before["Test Style A"]
+    assert after["Style With Spaces"] == before["Style With Spaces"]
+    b = after["Renamed B"]
+    assert b["prompt"] == before["Test Style B"]["prompt"]
+    assert b["negative_prompt"] == before["Test Style B"]["negative_prompt"]
+    assert b["description"] == before["Test Style B"]["description"]
+    assert b["category_explicit"] == before["Test Style B"]["category_explicit"]
+    assert [s["name"] for s in csv_io.parse_styles_csv(str(tmp_csv))] == [
+        "Test Style A",
+        "Renamed B",
+        "Style With Spaces",
+    ]
+
+
+def test_rename_preserves_row_position(tmp_path, monkeypatch):
+    monkeypatch.setattr(csv_io, "invalidate_styles_cache", lambda: None)
+    p = tmp_path / "styles.csv"
+    p.write_text(
+        "name,prompt,negative_prompt,description,category\n"
+        "First,a,,,\n"
+        "Middle,b,,,\n"
+        "Last,c,,,\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(csv_io, "get_all_styles_file_paths", lambda: [str(p)])
+    csv_io.rename_style_in_csv("Middle", "MiddleRenamed", source_file="styles.csv")
+    assert [s["name"] for s in csv_io.parse_styles_csv(str(p))] == [
+        "First",
+        "MiddleRenamed",
+        "Last",
+    ]
+
+
+def test_rename_preserves_extra_columns(tmp_path, monkeypatch):
+    """Renamed row must keep trailing columns; only the name cell changes."""
+    import csv
+    import io
+
+    monkeypatch.setattr(csv_io, "invalidate_styles_cache", lambda: None)
+    p = tmp_path / "styles.csv"
+    p.write_text(
+        "name,prompt,negative_prompt,description,category,extra_a,extra_b\n"
+        "Keep,ka,kn,kd,BASE,keep1,keep2\n"
+        "RenameMe,ra,rn,rd,BODY,extra_val,42\n",
+        encoding="utf-8-sig",
+    )
+    monkeypatch.setattr(csv_io, "get_all_styles_file_paths", lambda: [str(p)])
+    csv_io.rename_style_in_csv("RenameMe", "Renamed", source_file="styles.csv")
+
+    text = p.read_text(encoding="utf-8-sig")
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0] == [
+        "name",
+        "prompt",
+        "negative_prompt",
+        "description",
+        "category",
+        "extra_a",
+        "extra_b",
+    ]
+    renamed = next(r for r in rows[1:] if r and r[0] == "Renamed")
+    assert renamed == ["Renamed", "ra", "rn", "rd", "BODY", "extra_val", "42"]
+    keep = next(r for r in rows[1:] if r and r[0] == "Keep")
+    assert keep == ["Keep", "ka", "kn", "kd", "BASE", "keep1", "keep2"]
+
+
+def test_rename_applies_field_updates(tmp_csv, patch_styles_dirs, monkeypatch):
+    monkeypatch.setattr(csv_io, "invalidate_styles_cache", lambda: None)
+    csv_io.rename_style_in_csv(
+        "Test Style A",
+        "Style A Renamed",
+        source_file="styles.csv",
+        prompt="new_prompt",
+        negative_prompt="new_neg",
+        description="new_desc",
+        category="NEWCAT",
+    )
+    styles = csv_io.parse_styles_csv(str(tmp_csv))
+    a = next(s for s in styles if s["name"] == "Style A Renamed")
+    assert a["prompt"] == "new_prompt"
+    assert a["negative_prompt"] == "new_neg"
+    assert a["description"] == "new_desc"
+    assert a["category_explicit"] == "NEWCAT"
+    assert not any(s["name"] == "Test Style A" for s in styles)
+
+
+def test_rename_same_name_is_noop_success(tmp_csv, patch_styles_dirs, monkeypatch):
+    monkeypatch.setattr(csv_io, "invalidate_styles_cache", lambda: None)
+    before = {s["name"]: dict(s) for s in csv_io.parse_styles_csv(str(tmp_csv))}
+    assert csv_io.rename_style_in_csv(
+        "Test Style A", "Test Style A", source_file="styles.csv"
+    ) is True
+    after = {s["name"]: dict(s) for s in csv_io.parse_styles_csv(str(tmp_csv))}
+    assert list(after.keys()) == list(before.keys())
+    assert after == before
+
+
+def test_rename_old_name_not_found_raises_and_leaves_file(tmp_csv, patch_styles_dirs, monkeypatch):
+    monkeypatch.setattr(csv_io, "invalidate_styles_cache", lambda: None)
+    before = tmp_csv.read_bytes()
+    with pytest.raises(ValueError):
+        csv_io.rename_style_in_csv(
+            "No Such Style", "Whatever", source_file="styles.csv"
+        )
+    assert tmp_csv.read_bytes() == before
+
+
+def test_rename_collision_raises_and_leaves_file(tmp_csv, patch_styles_dirs, monkeypatch):
+    monkeypatch.setattr(csv_io, "invalidate_styles_cache", lambda: None)
+    before = tmp_csv.read_bytes()
+    with pytest.raises(ValueError):
+        csv_io.rename_style_in_csv(
+            "Test Style A", "Test Style B", source_file="styles.csv"
+        )
+    assert tmp_csv.read_bytes() == before
+    names = [s["name"] for s in csv_io.parse_styles_csv(str(tmp_csv))]
+    assert names == ["Test Style A", "Test Style B", "Style With Spaces"]
+
+
+def test_rename_lora_source_raises(monkeypatch):
+    monkeypatch.setattr(csv_io, "invalidate_styles_cache", lambda: None)
+    from stylegrid.lora_scan import LORA_SOURCE
+
+    with pytest.raises(ValueError, match="(?i)lora"):
+        csv_io.rename_style_in_csv(
+            "AnyName", "OtherName", source_file=LORA_SOURCE
+        )
+
+
+def test_rename_ambiguous_duplicate_old_name_raises_and_leaves_file(tmp_path, monkeypatch):
+    """Documented decision: refuse when old_name matches multiple rows (unlike save)."""
+    monkeypatch.setattr(csv_io, "invalidate_styles_cache", lambda: None)
+    p = tmp_path / "styles.csv"
+    content = (
+        "name,prompt,negative_prompt,description,category\n"
+        "Dup,old1,,,\n"
+        "Dup,old2,,,\n"
+        "Other,x,,,\n"
+    )
+    p.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(csv_io, "get_all_styles_file_paths", lambda: [str(p)])
+    before = p.read_bytes()
+    with pytest.raises(ValueError):
+        csv_io.rename_style_in_csv("Dup", "DupRenamed", source_file="styles.csv")
+    assert p.read_bytes() == before

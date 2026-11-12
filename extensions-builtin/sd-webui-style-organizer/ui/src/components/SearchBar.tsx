@@ -1,0 +1,140 @@
+import { useId, useState, useRef } from 'react'
+import {
+  dedupeStylesByNameForAllSources,
+  matchesSearch,
+  styleRowKey,
+  useStylesStore,
+} from '../store/stylesStore'
+import { useLayer } from '../lib/layerStack'
+import { cn } from '../lib/utils'
+import {
+  Command, CommandEmpty, CommandGroup,
+  CommandItem, CommandList
+} from './ui/command'
+import { Popover, PopoverContent, PopoverAnchor } from './ui/popover'
+
+const FOCUS_RING =
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sg-accent focus-visible:ring-offset-1 focus-visible:ring-offset-sg-bg'
+
+type StyleRow = ReturnType<typeof useStylesStore.getState>['styles'][number]
+
+function topSuggestions(styles: StyleRow[], query: string): StyleRow[] {
+  if (query.length === 0) return []
+  return styles.filter(s => matchesSearch(s, query)).slice(0, 8)
+}
+
+export function SearchBar() {
+  const { styles, activeSource, search, setSearch, toggleStyle, selectedStyles } = useStylesStore()
+  const [open, setOpen] = useState(false)
+  const [inputValue, setInputValue] = useState(search)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const listId = useId()
+
+  useLayer(open, () => setOpen(false))
+
+  // Autocomplete suggestions:
+  // - specific source selected: search only in that CSV
+  // - All Sources selected: search across all loaded styles
+  const searchableStyles = activeSource
+    ? styles.filter(s => s.source_file === activeSource)
+    : dedupeStylesByNameForAllSources(styles)
+
+  const suggestions = topSuggestions(searchableStyles, inputValue)
+
+  const handleInput = (val: string) => {
+    setInputValue(val)
+    setSearch(val)
+    const matches = topSuggestions(searchableStyles, val)
+    setOpen(val.length > 0 && matches.length > 0)
+  }
+
+  const handleSelect = (style: typeof styles[0]) => {
+    setOpen(false)
+    // Apply immediately if not already selected. Query text is left as-is —
+    // picking a suggestion should not also wipe the search context.
+    const isSelected = selectedStyles.some(s => styleRowKey(s) === styleRowKey(style))
+    if (!isSelected) toggleStyle(style)
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverAnchor asChild>
+        <div className="relative flex-1">
+          <input
+            ref={inputRef}
+            role="combobox"
+            aria-expanded={open}
+            aria-controls={listId}
+            aria-autocomplete="list"
+            aria-label="Search styles"
+            value={inputValue}
+            onChange={e => handleInput(e.target.value)}
+            onKeyDown={e => {
+              // Escape: layer stack closes the list first; App clears query next.
+              if (e.key === 'ArrowDown' && open) e.preventDefault()
+            }}
+            placeholder="Search styles..."
+            className={cn(
+              'w-full h-9 px-3 pr-8 rounded border border-sg-border',
+              'bg-sg-surface text-sg-text text-sm',
+              'placeholder:text-sg-muted focus:border-sg-accent',
+              'focus:outline-none transition-colors',
+              FOCUS_RING,
+            )}
+          />
+          {inputValue && (
+            <button
+              type="button"
+              aria-label="Clear search"
+              onClick={() => { setInputValue(''); setSearch(''); setOpen(false) }}
+              className={cn(
+                'absolute right-2 top-1/2 -translate-y-1/2',
+                'text-sg-muted hover:text-sg-text text-xs rounded',
+                FOCUS_RING,
+              )}
+            >✕</button>
+          )}
+        </div>
+      </PopoverAnchor>
+      <PopoverContent
+        className="p-0 w-72 bg-sg-popover border border-sg-border"
+        align="start"
+        onOpenAutoFocus={e => e.preventDefault()}
+        onEscapeKeyDown={e => e.preventDefault()}
+      >
+        <Command shouldFilter={false} className="bg-transparent">
+          <CommandList id={listId} className="bg-transparent">
+            <CommandEmpty className="text-sg-muted text-sm py-3 px-4">
+              No styles found
+            </CommandEmpty>
+            <CommandGroup>
+              {suggestions.map(style => (
+                <CommandItem
+                  key={styleRowKey(style)}
+                  value={style.name}
+                  onSelect={() => handleSelect(style)}
+                  className="cursor-pointer flex items-center justify-between
+                             text-sg-text hover:bg-sg-accent/20
+                             aria-selected:bg-sg-accent/15
+                             px-3 py-2"
+                >
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-sm truncate text-sg-text font-medium">
+                      {style.name.includes('_')
+                        ? style.name.split('_').slice(1).join(' ')
+                        : style.name}
+                    </span>
+                    <span className="text-xs text-sg-muted">{style.category}</span>
+                  </div>
+                  {selectedStyles.some(s => styleRowKey(s) === styleRowKey(style)) && (
+                    <span className="text-sg-accent text-xs ml-2 shrink-0">✓</span>
+                  )}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}

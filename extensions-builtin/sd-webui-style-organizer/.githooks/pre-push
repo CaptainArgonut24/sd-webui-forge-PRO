@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Local quality gate (replaces GitHub Actions CI). Abort push on failure.
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+echo "pre-push: EOL guard"
+if git ls-files --eol | grep -E 'i/crlf|[[:space:]]w/crlf' ; then
+  echo "pre-push: CRLF found in index or text working files (see above). Fix with git add --renormalize + rewrite from index." >&2
+  exit 1
+fi
+if git grep -I -l $'\r' -- ui/dist ; then
+  echo "pre-push: CR bytes in committed ui/dist (see above). Rebuild from LF sources." >&2
+  exit 1
+fi
+
+echo "pre-push: sg_wildcard_golden SHA256 vs Comfy sibling"
+python - <<'PY'
+from __future__ import annotations
+
+import hashlib
+import sys
+from pathlib import Path
+
+LOCAL = Path("tests/fixtures/sg_wildcard_golden.json")
+# Same sibling-checkout pattern as tests/test_safe_persistence.py SHA256 gate.
+SIBLING = Path(
+    r"D:\SD\Packages\ComfyUI\custom_nodes"
+    r"\sd-comfyui-style-organizer\tests\fixtures\sg_wildcard_golden.json"
+)
+SIBLING_REPO = "sd-comfyui-style-organizer"
+
+if not LOCAL.is_file():
+    print(f"pre-push: missing {LOCAL}", file=sys.stderr)
+    sys.exit(1)
+if not SIBLING.is_file():
+    print(
+        f"pre-push: sibling golden not present at {SIBLING}; "
+        f"skip cross-repo check (need local {SIBLING_REPO} checkout)",
+        file=sys.stderr,
+    )
+    sys.exit(0)
+
+local_digest = hashlib.sha256(LOCAL.read_bytes()).hexdigest()
+sibling_digest = hashlib.sha256(SIBLING.read_bytes()).hexdigest()
+if local_digest != sibling_digest:
+    print(
+        f"pre-push: sg_wildcard_golden.json SHA256 drift vs {SIBLING_REPO} "
+        f"(local={local_digest}, sibling={sibling_digest})",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+print(f"pre-push: sg_wildcard_golden SHA256 matches {SIBLING_REPO}")
+PY
+
+echo "pre-push: root lint"
+npm run lint
+
+echo "pre-push: pytest (min count enforced)"
+npm test
+
+echo "pre-push: UI typecheck + lint + vitest"
+(
+  cd ui
+  npx tsc --noEmit -p tsconfig.app.json
+  npx tsc --noEmit -p tsconfig.node.json
+  npx tsc --noEmit -p tsconfig.test.json
+  npm run lint
+  npm test
+)
+
+echo "pre-push: rebuild UI and require ui/dist match"
+( cd ui ; npm run build )
+echo "pre-push: built CSS must not contain template residue (dynamic Tailwind class)"
+if grep -l -F '\$\{' ui/dist/assets/*.css; then
+  echo "pre-push: built CSS contains a mangled dynamic class. Use literal class strings in Tailwind utilities." >&2
+  exit 1
+fi
+git diff --exit-code -- ui/dist
+
+echo "pre-push: ok"

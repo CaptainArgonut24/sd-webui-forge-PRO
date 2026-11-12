@@ -1,0 +1,840 @@
+# Backend API Reference
+
+Base URL: `http://127.0.0.1:7860/style_grid`
+
+Gradio/FastAPI. All endpoints return HTTP 200 even on errors unless otherwise noted. Check response body for `{error}` field.
+
+## V2 Integration Notes
+
+Style Grid V2 UI (React iframe) communicates with the host script via `postMessage` (`SG_*` types in `ui/src/bridge.ts`), then the host calls these API routes. The iframe document is loaded via **GET `/style_grid/ui`** (see **GET /ui**). The host keeps **two** `message` listeners (txt2img and img2img iframes); handlers should only act when `event.source === <that tab’s iframe>.contentWindow` so a message from one frame is not applied to the wrong tab.
+
+Thumbnail **image** requests use `GET /style_grid/thumbnail?name=…&source=…`. For normal CSV styles **`source` is required** (absolute or resolvable CSV path / `source_file`) — the handler calls `get_thumbnail_path(name, source)` only (**400** if `source` is missing). When `source` is `__style_grid_lora__` or `name` starts with `LORA_`, the handler serves the sibling preview file from the LoRA scan cache (or 404). Clients may still append `v` for cache busting. **Generation / upload / delete** also require `source` in the body or query — and are refused for LoRA rows.
+
+```mermaid
+flowchart LR
+  UI[React iframe UI] -->|SG_* postMessage| HOST[javascript/style_grid.mjs]
+  HOST -->|fetch /style_grid/*| API[FastAPI routes]
+  API --> DATA[(CSV + data files)]
+```
+
+The API contract in this document reflects `stylegrid/routes.py` (registered from `scripts/style_grid.py`).
+
+## GET /ui
+
+**Method:** GET  
+**Description:** Serves the V2 React shell HTML from `ui/dist/index.html`. Implementation: **`_get_ui_html()`** in `stylegrid/routes.py` transforms the file so **every** relative asset reference (`src` / `href` with a `./…` path) is rewritten to Gradio static URLs under `/file=extensions/sd-webui-style-organizer/ui/dist/…` with a **fresh** cache-busting `?v=<unix time>` on **each** response (scripts, stylesheets, favicon, etc.). The host iframe uses this route (e.g. `GET /style_grid/ui?t=<timestamp>`) instead of loading the file via `/file=…/index.html` alone, so the HTML document and **all** linked assets stay fresh after rebuilds. When publicly bound (`--listen` / `--share`), the HTML embeds `window.__STYLE_GRID_WRITE_TOKEN__` for mutating API calls.
+
+**Auth:** With `--gradio-auth`, anonymous requests get **401**. Style Grid re-checks Gradio session cookies (`access-token` / `access-token-unsecure` on Gradio 3.x; newer Gradio may use `access-token-<cookie_id>`). Gradio only Depends-protects its own routes, so extension paths are gated in `stylegrid/write_auth.py` + `stylegrid/gradio_session.py`. Mutating `/style_grid/*` routes use the same session gate. Without Gradio auth, this route is open to whoever can reach the server.
+
+**Parameters:** Optional query on the iframe URL (e.g. `t`) is for browser cache busting of the **document** request; the handler does not parse preset names from the query.
+
+**Response:** `text/html`
+
+**Error cases:** If `ui/dist/index.html` is missing (UI not built), the server may return an error response. **401** when `--gradio-auth` is set and no Gradio session cookie is present.
+
+## Generation-time: `{sg:…}` wildcards
+
+This is **not** an HTTP API. During each generation, `scripts/style_grid.py` runs `resolve_sg_wildcards` from `stylegrid/wildcards.py` over the positive and negative prompt strings.
+
+| Topic | Behavior |
+|---|---|
+| Syntax | `{sg:<category>}` (whole category) or `{sg:<category>:<spec>}` (slice). Matched by regex `\{(sgd?):([^}]+)\}` with `re.IGNORECASE` (the `sg` / `sgd` prefix is case-insensitive); the capture is split on the **first** `:` by `parse_sg_token`. Same forms exist for shuffle tokens `{sgd:…}`. |
+| Spec grammar | Implemented by `select_slice`: comma-separated entries; each entry is a style-name suffix with the category prefix omitted, optionally `-`-prefixed to exclude and/or `*`-suffixed as a prefix glob. Full names are reconstructed as `CATEGORY_suffix` and compared case-insensitively. |
+| Resolution | Include entries are unioned first (all candidates when there are no include entries); then excludes subtract. |
+| Lookup | Token category is lowercased; map key is lowercased category from loaded styles. |
+| Replacement | One random style from the resolved pool. Field follows the prompt side: positive → CSV **`prompt`**; negative → CSV **`negative_prompt`** (`field=` passed by `scripts/style_grid.py`). `scripts/style_grid.py` resolves once per batch group (`DeckContext(all_seeds[0], i // batch_size)` via `dice_rng`): images inside one batch share one expansion; different batches differ. `resolve_sg_wildcards` without `rng` still uses the module `random`. |
+| Paired negatives | `resolve_sg_picks` returns the text plus the picks (`Pick(key, style)`, key = kind, category, normalized spec). For each prompt slot the negative is: user text, then each positive pick's `negative_prompt` in token order, resolved with `paired=` the positive picks (the k-th negative token with the same key reuses the k-th positive pick), then `dedup_prompt`, then `drop_shared_tags` removes negative tags whose `dedup_prompt` identity is in the expanded positive (only for slots with picks; logged at INFO). Within a batch, slots share the same picks/expansion. Hires lists reuse the same picks. Always on. Infotext: the PNG and gallery infotext shows one string per image, `NAME (source), …`, identical within a batch. In Python, `extra_generation_params["Style Grid styles"]` is a callable that `create_infotext` resolves per image (batch-local index on PNG save, global index in the gallery), not a list. |
+| Empty field | An empty chosen field resolves to an empty string (the token is not kept), on both the positive and negative sides. |
+| Empty slice pool | Falls back to the full category (so a stale/missing-name token still generates). |
+| Nesting depth | Nested `{sg:…}` / `{sgd:…}` tokens resolve in up to **`_MAX_PASSES` = 3** passes (`stylegrid/wildcards.py`). Leftovers after that are stripped with a warning. |
+| Empty category | Category present but with no styles: raw token is left through nested passes, then stripped to an empty string with a warning. |
+| Unknown category | Raw `{sg:…}` / `{sgd:…}` token is left in place through nested passes, then stripped with a warning (not left in the final prompt). |
+
+`parse_sg_token` and `select_slice` are module-level in `stylegrid/wildcards.py` and are the **single source of truth**. The frontend’s `resolveSliceNames` in `ui/src/lib/wildcardSlice.ts` mirrors their semantics purely to compute chip labels and must be kept in sync if the grammar changes. Shared cases live in `tests/fixtures/slice_grammar.json` and are asserted by `tests/test_slice_grammar_parity.py` (Python) and `ui/src/lib/wildcardSlice.parity.test.ts` (Vitest).
+
+**Compatibility:** Automatic1111-style wildcard extensions (e.g. file-based **`__wildcard__`** tokens) use **different** syntax. They do not consume `{sg:…}` and Style Grid does not consume `__…__` — no mandatory conflict. **`{sg:…}` does not require** installing external wildcard extensions; it is self-contained in this extension.
+
+## Styles
+
+## GET /styles
+
+**Method:** GET  
+**Description:** Returns categorized styles and presets, with ETag support. The style list from `get_cached_styles()` is CSV styles plus scanned LoRA synthetic rows (`stylegrid/lora_scan.py`).
+
+**Parameters:**
+
+
+| name            | in     | required | type   | description                       |
+| --------------- | ------ | -------- | ------ | --------------------------------- |
+| `If-None-Match` | header | No       | string | ETag value for conditional fetch. |
+
+
+**ETag:** MD5 of `json.dumps({"csv": styles_cache_hashes(), "lora": lora_scan_status()}, sort_keys=True, default=str)`. Changing CSV files or LoRA scan status invalidates the cache.
+
+**Response:**
+
+
+| field        | type   | description                                     |
+| ------------ | ------ | ----------------------------------------------- |
+| `categories` | object | Map of category name -> array of style objects. |
+| `presets`    | object | Saved presets map (same shape as GET `/presets`). |
+
+
+Style object fields include:
+
+
+| field               | type    | description                                                 |
+| ------------------- | ------- | ----------------------------------------------------------- |
+| `name`              | string  | Style name from CSV, or synthetic `LORA_…` key for LoRAs.   |
+| `prompt`            | string  | Positive prompt fragment (`<lora:…>` for LoRA rows).        |
+| `negative_prompt`   | string  | Negative prompt fragment.                                   |
+| `description`       | string  | Freeform description.                                       |
+| `category_explicit` | string  | Raw category column value from CSV, or LoRA relative folder / `"LoRA"`. |
+| `source_file`       | string  | Absolute CSV path (forward-slash normalized), or `__style_grid_lora__` for LoRA rows.   |
+| `category`          | string  | Resolved category.                                          |
+| `display_name`      | string  | Card label: filename-derived by default; CivitAI title when pre-set for LoRAs. |
+| `has_placeholder`   | boolean | True if `{prompt}` is present in prompt or negative prompt. |
+
+
+**Error cases:**
+
+
+| case                         | behavior                           |
+| ---------------------------- | ---------------------------------- |
+| Cache hit with matching ETag | Returns HTTP `304` and empty body. |
+
+
+## GET /check_update
+
+**Method:** GET  
+**Description:** Returns whether any tracked CSV files changed.
+
+**Parameters:**
+
+
+| name   | in    | required | type | description    |
+| ------ | ----- | -------- | ---- | -------------- |
+| (none) | query | No       | -    | No parameters. |
+
+
+**Response:**
+
+
+| field     | type    | description                         |
+| --------- | ------- | ----------------------------------- |
+| `changed` | boolean | True if CSV set or content changed. |
+
+
+**Error cases:** None explicitly returned as `{error}`.
+
+## Presets
+
+Canonical on-disk / API shape (normalized on load; legacy bare-name style entries and missing fields are upgraded):
+
+```json
+{
+  "Warrior": {
+    "styles": [
+      { "name": "Style_A", "source_file": "/abs/path/pack.csv", "weight": 1.0 }
+    ],
+    "wildcards": [{ "category": "POSE", "spec": "" }],
+    "note": "",
+    "created": "2026-01-01T12:00:00",
+    "last_used": "2026-03-01T09:00:00"
+  }
+}
+```
+
+Defaults when absent: `wildcards: []`, `note: ""`, `weight: 1.0`. Unresolvable style names are **kept** (empty `source_file`) so clients can show missing members. First load after upgrade rewrites `data/presets.json` when the file is still in a legacy shape.
+
+## GET /presets
+
+**Method:** GET  
+**Description:** Returns all saved presets, normalized to the canonical shape above.
+
+**Parameters:**
+
+
+| name   | in    | required | type | description    |
+| ------ | ----- | -------- | ---- | -------------- |
+| (none) | query | No       | -    | No parameters. |
+
+
+**Response:**
+
+
+| field           | type   | description                                    |
+| --------------- | ------ | ---------------------------------------------- |
+| `<preset_name>` | object | Dynamic keys; each value includes preset data. |
+
+
+Preset object fields:
+
+
+| field       | type          | description |
+| ----------- | ------------- | ----------- |
+| `styles`    | array[object] | `{ "name", "source_file", "weight" }` (legacy bare strings accepted on write / import and normalized). |
+| `wildcards` | array[object] | `{ "category", "spec" }` (default `[]`). |
+| `note`      | string        | Freeform note (default `""`). |
+| `created`   | string        | Timestamp (`YYYY-MM-DDTHH:MM:SS`); preserved on overwrite. |
+| `last_used` | string        | Optional; set by `POST /presets/touch`. |
+
+
+**Error cases:** None explicitly returned as `{error}`.
+
+## POST /presets/save
+
+**Method:** POST  
+**Description:** Creates a preset, or updates it when `overwrite` is true. Without `overwrite`, an existing name returns `{ "error": "exists" }` (no silent clobber).
+
+**Parameters:**
+
+
+| name        | in   | required | type                     | description |
+| ----------- | ---- | -------- | ------------------------ | ----------- |
+| `name`      | body | Yes      | string                   | Preset name (trimmed). |
+| `styles`    | body | No       | array[string \| object] | Bare names and/or `{name, source_file?, weight?}`. |
+| `wildcards` | body | No       | array[object]            | `{category, spec}` list. |
+| `note`      | body | No       | string                   | Freeform note. |
+| `overwrite` | body | No       | boolean                  | Required true to replace an existing name. |
+
+
+**Response:**
+
+Success:
+
+
+| field     | type    | description               |
+| --------- | ------- | ------------------------- |
+| `ok`      | boolean | `true` on success.        |
+| `presets` | object  | Full updated presets map. |
+
+
+**Error cases:**
+
+
+| case                          | response body                              |
+| ----------------------------- | ------------------------------------------ |
+| Missing/empty `name`          | `{ "error": "Name required" }`             |
+| Name exists, `overwrite` falsy | `{ "error": "exists", "name": "<name>" }` |
+| Invalid `styles` shape        | `{ "error": "styles must be a list of names or {name, source_file?, weight?}" }` |
+
+
+## POST /presets/delete
+
+**Method:** POST  
+**Description:** Deletes a preset by name if it exists.
+
+**Parameters:**
+
+
+| name   | in   | required | type   | description            |
+| ------ | ---- | -------- | ------ | ---------------------- |
+| `name` | body | No       | string | Preset name to remove. |
+
+
+**Response:**
+
+
+| field     | type    | description                              |
+| --------- | ------- | ---------------------------------------- |
+| `ok`      | boolean | `true` on completion.                    |
+| `presets` | object  | Full presets map after deletion attempt. |
+
+
+**Error cases:** None explicitly returned as `{error}`.
+
+## POST /presets/rename
+
+**Method:** POST  
+**Description:** Renames a preset. Target collision without `overwrite` returns `exists`.
+
+**Parameters:**
+
+
+| name        | in   | required | type    | description |
+| ----------- | ---- | -------- | ------- | ----------- |
+| `old_name`  | body | Yes      | string  | Existing preset name. |
+| `new_name`  | body | Yes      | string  | New preset name. |
+| `overwrite` | body | No       | boolean | Replace target if it already exists. |
+
+
+**Response:** `{ "ok": true, "presets": … }` on success.
+
+**Error cases:** `Name required`; `{ "error": "not_found", "name" }`; `{ "error": "exists", "name" }`.
+
+## POST /presets/touch
+
+**Method:** POST  
+**Description:** Sets `last_used` on an existing preset to now.
+
+**Parameters:**
+
+
+| name   | in   | required | type   | description |
+| ------ | ---- | -------- | ------ | ----------- |
+| `name` | body | Yes      | string | Preset name. |
+
+
+**Response:** `{ "ok": true, "presets": … }` on success.
+
+**Error cases:** `Name required`; `{ "error": "not_found", "name" }`.
+
+## Thumbnails
+
+CSV thumbnail identity is **`name` + `source` (`source_file`)**. Filenames under `data/thumbnails/` are `md5(name::relative_or_basename).webp` via `thumbnail_hash_key` / `get_thumbnail_path` in `stylegrid/thumbnails.py`. Legacy name-only hashes are no longer used for GET/upload/generate/delete.
+
+On `GET /thumbnails/list`, `migrate_legacy_thumbnails()` renames a legacy name-only WebP to the source-aware path **only when that style name belongs to exactly one known CSV**. Names present in multiple packs are left unmapped (ambiguous → regenerate).
+
+Generation is a **FIFO single-worker queue** (`ThumbnailGenerationManager`): enqueue returns a `job_id`; clients poll status and may cancel.
+
+## GET /thumbnails/list
+
+**Method:** GET  
+**Description:** Returns styles that currently have a thumbnail file, matched by scanning cached styles against on-disk WebP hashes.
+
+**Parameters:**
+
+
+| name   | in    | required | type | description    |
+| ------ | ----- | -------- | ---- | -------------- |
+| (none) | query | No       | -    | No parameters. |
+
+
+**Response:**
+
+
+| field           | type          | description |
+| --------------- | ------------- | ----------- |
+| `has_thumbnail` | array[object] | Entries `{ "name": string, "source_file": string }` for rows with an existing thumbnail. |
+
+
+**Error cases:** None explicitly returned as `{error}`.
+
+## GET /thumbnail
+
+**Method:** GET  
+**Description:** Returns a single thumbnail / preview image.
+
+**LoRA branch:** If query `source` equals `__style_grid_lora__` **or** `name` starts with `LORA_`, the handler returns the sibling preview file from `get_lora_preview_path(name)` (media type from file extension), or HTTP `404` if none. It does **not** use the CSV thumbnail pipeline.
+
+**CSV styles:** `source` is **required**. Path = `get_thumbnail_path(name, source)`. Missing file → HTTP `404`.
+
+**Parameters:**
+
+
+| name     | in    | required | type   | description |
+| -------- | ----- | -------- | ------ | ----------- |
+| `name`   | query | Yes      | string | Style name (same as in `/styles`). |
+| `source` | query | Yes*     | string | CSV `source_file` path for CSV styles. For LoRA, `__style_grid_lora__` (or rely on `LORA_` name prefix). |
+| (other)  | query | No       | string | e.g. cache-busting `v`. |
+
+\*Required for CSV thumbnails; omitted `source` on a non-LoRA request returns **400**.
+
+**Response:**
+
+
+| type                | description                     |
+| ------------------- | ------------------------------- |
+| `image/webp` (CSV) or `image/jpeg` / `image/png` / … (LoRA) | Image body when found. |
+
+
+**Error cases:**
+
+
+| case | behavior |
+| ---- | -------- |
+| Missing `source` (CSV) | HTTP `400` JSON `{ "ok": false, "error": "source is required for CSV thumbnails" }`. |
+| Thumbnail / preview missing | Returns HTTP `404` (not JSON `{error}`). |
+
+
+## POST /thumbnail/upload
+
+**Method:** POST  
+**Description:** Uploads a base64-encoded image as a style thumbnail. Decodes JPEG/PNG/GIF/WebP with Pillow (first frame of animations), converts to WebP, and atomically replaces the target file.
+
+**Parameters:**
+
+
+| name     | in   | required | type   | description |
+| -------- | ---- | -------- | ------ | ----------- |
+| `name`   | body | Yes      | string | Style name to attach thumbnail to. |
+| `image`  | body | Yes      | string | Base64 payload (raw or data URL). |
+| `source` | body | Yes*     | string | CSV `source_file` for path identity. |
+
+
+**Response:**
+
+Success:
+
+
+| field | type    | description                    |
+| ----- | ------- | ------------------------------ |
+| `ok`  | boolean | `true` after successful write. |
+
+
+**Error cases:**
+
+
+| case                       | response body                                                        |
+| -------------------------- | -------------------------------------------------------------------- |
+| Missing `name` or `image`  | `{ "error": "name and image required" }`                             |
+| Missing `source` (CSV)     | HTTP `400` `{ "ok": false, "error": "source is required for CSV thumbnails" }` |
+| File too large (>2MB)      | `{ "error": "Image too large (max 2MB)" }`                           |
+| Unsupported file signature | `{ "error": "Invalid image format. Allowed: JPEG, PNG, WEBP, GIF" }` |
+| WebP conversion failure    | HTTP `400` `{ "ok": false, "error": "Failed to convert image to WebP: …" }` |
+| Unexpected exception       | `{ "error": "<exception message>" }`                                 |
+| LoRA source / `LORA_` name | `{ "error": "LoRA thumbnails come from the model's own preview file and can't be replaced here." }` |
+
+
+## GET /thumbnail/gen_status
+
+**Method:** GET  
+**Description:** Returns generation state for a queued thumbnail job.
+
+**Parameters:**
+
+
+| name     | in    | required | type   | description |
+| -------- | ----- | -------- | ------ | ----------- |
+| `job_id` | query | Yes      | string | Job id returned by `POST /thumbnail/generate`. |
+
+
+**Response:**
+
+
+| field              | type    | description |
+| ------------------ | ------- | ----------- |
+| `id`               | string  | Job id. |
+| `name`             | string  | Style name. |
+| `source`           | string  | CSV source used for the job. |
+| `status`           | string  | `queued`, `running`, `done`, `error`, or `cancelled`. |
+| `message`          | string \| null | Present on error states. |
+| `cancel_requested` | boolean | Soft-cancel flag while running. |
+
+
+**Error cases:**
+
+
+| case | behavior |
+| ---- | -------- |
+| Missing `job_id` | HTTP `400` `{ "ok": false, "error": "job_id is required" }`. |
+| Unknown `job_id` | `{ "status": "error", "message": "unknown job_id" }` (never a false `idle`). |
+
+
+## POST /thumbnail/generate
+
+**Method:** POST  
+**Description:** Enqueues asynchronous SD thumbnail generation for a style. Jobs run **one at a time** (FIFO). Soft-waits while the main Forge UI is busy generating.
+
+**Parameters:**
+
+
+| name     | in   | required | type   | description |
+| -------- | ---- | -------- | ------ | ----------- |
+| `name`   | body | Yes      | string | Style name to generate thumbnail for. |
+| `source` | body | Yes      | string | CSV `source_file` / path selecting the row (required for CSV; not optional). |
+
+
+**Response:**
+
+Success:
+
+
+| field    | type    | description |
+| -------- | ------- | ----------- |
+| `ok`     | boolean | `true` when the job was enqueued. |
+| `job_id` | string  | Opaque id for status/cancel. |
+| `status` | string  | `queued` on accept. |
+
+
+**Error cases:**
+
+
+| case                          | response body                                                            |
+| ----------------------------- | ------------------------------------------------------------------------ |
+| Missing/empty `name`          | `{ "error": "name required" }`                                           |
+| Missing `source`              | HTTP `400` `{ "ok": false, "error": "source is required for CSV thumbnails" }` |
+| LoRA source / `LORA_` name    | `{ "error": "LoRA cards only show their own preview file; SD-generated previews are disabled for them." }` |
+| Enqueue `ValueError`          | HTTP `400` `{ "ok": false, "error": "…" }`                               |
+
+
+## POST /thumbnail/cancel
+
+**Method:** POST  
+**Description:** Cancels a queued thumbnail job, or requests cancel + best-effort interrupt if the job is already running.
+
+**Parameters:**
+
+
+| name     | in   | required | type   | description |
+| -------- | ---- | -------- | ------ | ----------- |
+| `job_id` | body | Yes      | string | Job id from generate. |
+
+
+**Response:**
+
+
+| field | type    | description |
+| ----- | ------- | ----------- |
+| `ok`  | boolean | `true` if cancel was accepted; `false` if unknown / already finished. |
+
+
+**Error cases:**
+
+
+| case | behavior |
+| ---- | -------- |
+| Missing `job_id` | HTTP `400` `{ "ok": false, "error": "job_id is required" }`. |
+
+
+## CRUD
+
+## POST /style/save
+
+**Method:** POST  
+**Description:** Creates or updates style row(s) in a target CSV. On upsert, **every** row with the matching `name` in that file is rewritten (not first-match only). Basename resolve prefers writable paths over `samples/`.
+
+**Parameters:**
+
+
+| name              | in   | required | type   | description                                   |
+| ----------------- | ---- | -------- | ------ | --------------------------------------------- |
+| `name`            | body | Yes      | string | Style name (trimmed).                         |
+| `prompt`          | body | No       | string | Positive prompt content.                      |
+| `negative_prompt` | body | No       | string | Negative prompt content.                      |
+| `description`     | body | No       | string | Description text.                             |
+| `category`        | body | No       | string | Category override when provided.              |
+| `source`          | body | No       | string | Source CSV filename (with or without `.csv`). |
+
+
+**Response:**
+
+
+| field | type    | description        |
+| ----- | ------- | ------------------ |
+| `ok`  | boolean | `true` after save. |
+
+
+**Error cases:**
+
+
+| case | response body | HTTP |
+| ---- | ------------- | ---- |
+| Missing/empty `name` | `{ "error": "Name required" }` | 200 |
+| Resolved path under `samples/` | `{ "ok": false, "error": "Cannot modify styles from the read-only samples/ pack." }` | 403 |
+| LoRA / validation `ValueError` | `{ "ok": false, "error": "<message>" }` | 400 |
+
+
+## POST /style/delete
+
+**Method:** POST  
+**Description:** Deletes one style row by name from the selected source (or inferred source). Read-only `samples/` and LoRA rows are rejected.
+
+**Parameters:**
+
+
+| name     | in   | required | type   | description               |
+| -------- | ---- | -------- | ------ | ------------------------- |
+| `name`   | body | Yes      | string | Style name to delete.     |
+| `source` | body | No       | string | Source CSV filename hint. |
+
+
+**Response:**
+
+
+| field | type    | description                  |
+| ----- | ------- | ---------------------------- |
+| `ok`  | boolean | `true` after successful delete. |
+
+
+**Error cases:**
+
+
+| case | response body | HTTP |
+| ---- | ------------- | ---- |
+| Missing/empty `name` | `{ "error": "Name required" }` | 200 |
+| Resolved path under `samples/` | `{ "ok": false, "error": "Cannot modify styles from the read-only samples/ pack." }` | 403 |
+| LoRA / validation `ValueError` (including omit-source delete that only matches a LoRA) | `{ "ok": false, "error": "<message>" }` | 400 |
+| No matching CSV row | `{ "ok": false, "error": "Style not found" }` | 404 |
+
+
+## GET /backups
+
+**Method:** GET  
+**Description:** Lists timestamped snapshots under `data/backups/` (newest first) and reports the current `data/thumbnails/` byte size (for the opt-in thumbnails checkbox).
+
+**Response:**
+
+| field | type | description |
+| ----- | ---- | ----------- |
+| `backups` | array[object] | `{ name, has_dir, has_zip, size, members, has_thumbnails }` |
+| `thumbnails_bytes` | number | Total size of files under `data/thumbnails/`. |
+
+## POST /backup
+
+**Method:** POST  
+**Description:** Creates a timestamped backup of styles CSV files returned by `get_all_styles_file_paths()`, plus metadata JSON when present: `presets.json`, `category_order.json`, `favorites.json`, `recent.json`. Optional body flag `include_thumbnails` also copies `data/thumbnails/`. Paths that are not regular files on disk are **skipped**. Archive/folder members use **collision-safe relative names** (`styles/…`, `samples/…`, `external/…`, or bare metadata basenames).
+
+**Parameters:**
+
+
+| name   | in   | required | type   | description          |
+| ------ | ---- | -------- | ------ | -------------------- |
+| `include_thumbnails` | body | No | boolean | When `true`, include `thumbnails/` (can be large). |
+
+
+**Response:**
+
+Success (at least one file copied):
+
+
+| field | type    | description |
+| ----- | ------- | ----------- |
+| `ok`  | boolean | `true`.     |
+| `snapshot` | string | Timestamp folder/zip basename. |
+| `members` | array[string] | Relative member paths written. |
+| `thumbnails_bytes` | number | Bytes copied from thumbnails (0 if not included). |
+
+
+No files copied (all paths missing or list empty):
+
+
+| field | type    | description |
+| ----- | ------- | ----------- |
+| `ok`  | boolean | `false`.    |
+| `snapshot` | null | — |
+| `members` | array | Empty. |
+| `thumbnails_bytes` | number | `0`. |
+
+
+On unexpected failure while copying (exception in `backup_csv_files()`):
+
+
+| field   | type   | description                    |
+| ------- | ------ | ------------------------------ |
+| `error` | string | Exception message as a string. |
+
+
+**Error cases:**
+
+
+| case                         | response body                          |
+| ---------------------------- | -------------------------------------- |
+| Exception during backup I/O  | `{ "error": "<message>" }` (HTTP 200). |
+
+
+The host UI (`SG_BACKUP` → Backup / Restore modal) creates backups via this route and lists/restores via `/backups` and `/restore`.
+
+## POST /restore
+
+**Method:** POST  
+**Description:** Restores CSVs and metadata (and `thumbnails/` when present in the snapshot) from a chosen backup. Creates an automatic **safety** backup of the current state first (`…_safety`). Extension-relative members (`styles/…`, `samples/…`) and metadata basenames are restored; `external/…` members are skipped (drive letter was stripped at backup time).
+
+**Parameters:**
+
+| name | in | required | type | description |
+| ---- | -- | -------- | ---- | ----------- |
+| `snapshot` | body | Yes | string | Snapshot basename (`YYYYMMDD_HHMMSS` or `…_safety`). Alias: `name`. |
+
+**Response (success):** `{ "ok": true, "snapshot", "safety_snapshot", "restored": [...], "skipped": [...] }`
+
+**Error cases:** missing/invalid name → **400**; snapshot not found → **404**.
+
+## GET /export
+
+**Method:** GET  
+**Description:** Exports styles, presets, favorites, recent, and export timestamp.
+
+**Parameters:**
+
+
+| name   | in    | required | type | description    |
+| ------ | ----- | -------- | ---- | -------------- |
+| (none) | query | No       | -    | No parameters. |
+
+
+**Response:**
+
+
+| field         | type          | description                            |
+| ------------- | ------------- | -------------------------------------- |
+| `styles`      | array[object] | Flat list from all loaded CSV sources. |
+| `presets`     | object        | Presets map.                           |
+| `favorites`   | array[string] | Favorite style row keys.               |
+| `recent`      | array[string] | Recent style row keys (max 10).        |
+| `exported_at` | string        | Timestamp (`YYYY-MM-DDTHH:MM:SS`).     |
+
+
+**Error cases:** None explicitly returned as `{error}`.
+
+## POST /import
+
+**Method:** POST  
+**Description:** Imports presets into storage, optionally replaces favorites/recent lists, and optionally writes imported styles into a new CSV file.
+
+**Parameters:**
+
+
+| name      | in   | required | type          | description                                                 |
+| --------- | ---- | -------- | ------------- | ----------------------------------------------------------- |
+| `presets` | body | No       | object        | Preset map merged into existing presets.                    |
+| `favorites` | body | No     | array[string] | Replaces `data/favorites.json` when present.              |
+| `recent`  | body | No       | array[string] | Replaces `data/recent.json` when present (capped at 10).  |
+| `styles`  | body | No       | array[object] | Styles to write into `styles/imported_YYYYMMDD_HHMMSS.csv`. |
+
+
+**Response:**
+
+Success (no name collisions, or no `styles` / empty `styles`):
+
+
+| field | type    | description           |
+| ----- | ------- | --------------------- |
+| `ok`  | boolean | `true` on completion. |
+
+
+When `styles` is present and non-empty, the handler writes a new `styles/imported_YYYYMMDD_HHMMSS.csv` (same as before). Presets continue to merge via update. There is no merge/upsert of styles into an existing CSV.
+
+**Error cases:**
+
+
+| case | response body | HTTP |
+| ---- | ------------- | ---- |
+| One or more imported style names already exist in the library (LoRA-sourced styles are excluded from the check) | `{ "ok": false, "error": "Import contains style names that already exist in the library.", "collisions": ["…"] }` — `collisions` is a sorted list of conflicting names; no CSV is written and the styles cache is not invalidated | 400 |
+| Invalid JSON body | FastAPI `422` detail | 422 |
+
+
+Zip (`PK`) bodies remain presets-only and are unchanged by this collision check.
+
+## POST /category_order/save
+
+**Method:** POST  
+**Description:** Persists sidebar category order into `data/category_order.json`.
+
+**Parameters:**
+
+
+| name    | in   | required | type  | description          |
+| ------- | ---- | -------- | ----- | -------------------- |
+| `order` | body | No       | array | Category order list. |
+
+
+**Response:**
+
+Success:
+
+
+| field | type    | description        |
+| ----- | ------- | ------------------ |
+| `ok`  | boolean | `true` when saved. |
+
+
+**Error cases:**
+
+
+| case                  | response body                         |
+| --------------------- | ------------------------------------- |
+| `order` is not a list | `{ "error": "order must be a list" }` |
+
+## GET /favorites · GET /recent
+
+**Method:** GET  
+**Description:** Returns server-persisted favorites or recent style row keys (`source_file + "\\0" + name`) from `data/favorites.json` / `data/recent.json`.
+
+**Response:**
+
+| field       | type    | description |
+| ----------- | ------- | ----------- |
+| `items`     | array[string] | Ordered keys (recent capped at 10). |
+| `persisted` | boolean | `true` when the JSON file exists on disk (even if `items` is empty). |
+
+Missing file → `{ "items": [], "persisted": false }` (HTTP 200). Corrupt file → HTTP **409** `corrupt_data`.
+
+## POST /favorites/save · POST /recent/save
+
+**Method:** POST  
+**Description:** Replace the on-disk list. Body: `{ "items": ["…"] }`. Recent is capped at 10 unique keys.
+
+**Response:** `{ "ok": true, "items": […] }`
+
+## POST /favorites/migrate · POST /recent/migrate
+
+**Method:** POST  
+**Description:** One-shot localStorage → server migration. Writes `{ "items": […] }` **only when the target file is absent**. If the file already exists, returns the current server list with `migrated: false` (does not overwrite).
+
+**Response:** `{ "ok": true, "migrated": boolean, "items": […] }`
+
+## LoRA
+
+Synthetic LoRA styles are produced by `stylegrid/lora_scan.py` and merged into `/styles`. Marker string: `__style_grid_lora__`. Optional title enrichment: `stylegrid/lora_titles.py`. LoRA scan status is included in the `/styles` ETag inputs via `lora_scan_status()`.
+
+## POST /lora/fetch_titles
+
+**Method:** POST  
+**Description:** Starts a **manual** background job that fetches CivitAI model names for every scanned LoRA that has a `modelId` in sibling metadata. Never runs automatically. Uses sequential requests with throttling and 429 retries (`stylegrid/lora_titles.py`). On completion, invalidates the LoRA style cache so the next `/styles` load picks up `display_name`.
+
+**Parameters:**
+
+
+| name    | in   | required | type    | description |
+| ------- | ---- | -------- | ------- | ----------- |
+| `force` | body | No       | boolean | When true, refetch even if a successful title is already cached. |
+
+**Response (success):**
+
+
+| field               | type    | description |
+| ------------------- | ------- | ----------- |
+| `ok`                | boolean | `true` when the job was started. |
+| `total_candidates`  | number  | Unique `modelId` count passed to the job. |
+
+**Error cases:**
+
+
+| case | response body |
+| ---- | ------------- |
+| No modelIds | `{ "error": "No LoRAs with a modelId found (metadata missing or LoRA folder not scanned yet)" }` |
+| Job already running | `{ "error": "already running" }` |
+
+
+## GET /lora/fetch_titles/status
+
+**Method:** GET  
+**Description:** Polls `TitleFetchManager.get_status()`.
+
+**Response:**
+
+
+| field    | type   | description |
+| -------- | ------ | ----------- |
+| `status` | string | `idle`, `running`, or `done`. |
+| `done`   | number | Completed fetches in this job. |
+| `total`  | number | Pending count when the job started. |
+| `errors` | number | Failures recorded in this job. |
+
+
+## DELETE /thumbnail
+
+**Method:** DELETE  
+**Description:** Deletes a single CSV thumbnail for **`name` + `source`**. The UI context menu **Remove preview image** calls this with the style’s `source_file`.
+
+**Parameters:**
+
+| name     | in    | required | type   | description |
+| -------- | ----- | -------- | ------ | ----------- |
+| `name`   | query | Yes      | string | Style name used to resolve thumbnail path. |
+| `source` | query | Yes      | string | CSV `source_file`; missing → **400**. |
+
+**Response:**
+
+| field | type    | description              |
+| ----- | ------- | ------------------------ |
+| `ok`  | boolean | `true` after completion (including when the file was already absent). |
+
+**Error cases:**
+
+| case | behavior |
+| ---- | -------- |
+| Missing `source` | HTTP `400` `{ "ok": false, "error": "source is required for CSV thumbnails" }`. |
+

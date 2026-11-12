@@ -1,0 +1,44 @@
+import { defineConfig } from 'vitest/config'
+import react from '@vitejs/plugin-react'
+import path from 'path'
+
+export default defineConfig({
+  plugins: [react()],
+  base: './',
+  test: {
+    setupFiles: ['./vitest.setup.ts'],
+  },
+  build: {
+    outDir: 'dist',
+    assetsDir: 'assets',
+    rollupOptions: {
+      output: {
+        entryFileNames: 'assets/index.js',
+        chunkFileNames: 'assets/index.js',
+        assetFileNames: (assetInfo) => {
+          if (assetInfo.name?.endsWith('.css')) return 'assets/index.css'
+          return 'assets/[name][extname]'
+        },
+      },
+    },
+  },
+  resolve: {
+    alias: { '@': path.resolve(__dirname, './src') }
+  },
+  server: {
+    port: 5173,
+    // Allow importing host theme helpers from ../javascript for contract tests.
+    fs: {
+      allow: ['.', '..'],
+    },
+    proxy: {
+      '/style_grid': 'http://127.0.0.1:7860',
+      '/extensions/sd-webui-style-organizer/ui/dist': {
+        target: 'http://127.0.0.1:5173',
+        rewrite: (p) => p.replace(
+          '/extensions/sd-webui-style-organizer/ui/dist', ''
+        )
+      }
+    }
+  }
+})

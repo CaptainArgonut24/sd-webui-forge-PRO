@@ -1,0 +1,1449 @@
+import { create } from 'zustand'
+import {
+  sendToHost,
+  WILDCARD_KIND_DECK,
+  WILDCARD_KIND_DICE,
+  type Style,
+  type Tab,
+  type WildcardKind,
+  type WildcardRef,
+} from '../bridge'
+import { wildcardKey } from '../lib/wildcardKey'
+import {
+  parseCorruptData,
+  type CorruptDataInfo,
+} from '../lib/parseCorruptData'
+import { styleGridPost } from '../lib/styleGridFetch'
+import type { ThemeMode } from '../lib/themeMode'
+
+export type { ThemeMode }
+
+/** Matches the backend's LORA_SOURCE marker (stylegrid/lora_scan.py). LoRA
+ * cards use this as their synthetic source_file so they can be excluded
+ * from normal CSV source/category browsing and routed to their own
+ * sidebar view instead. */
+export const LORA_SOURCE = '__style_grid_lora__'
+
+/** Sidebar special-view id for the LoRA section, parallel to Favorites/Recent. */
+export const LORA_VIEW = '🧬 LoRA'
+
+interface Conflict {
+  styleA: string
+  styleB: string
+  styleAKey: string
+  styleBKey: string
+  reason: string
+}
+
+const TOAST_TTL_MS = 3000
+const TOAST_ERROR_TTL_MS = 6000
+
+// Fixed palettes of visually distinct colors — no duplicates. Both palettes
+// share hue order so a category keeps its hue when the theme flips.
+// DARK: >= 4.5:1 on #1a1a2e / #16213e / #0f172a. LIGHT: >= 4.5:1 on #fff / #f8fafc.
+export const DARK_CATEGORY_PALETTE: readonly string[] = [
+  '#f472b6', // pink
+  '#fb923c', // orange
+  '#facc15', // yellow
+  '#4ade80', // green
+  '#34d399', // emerald
+  '#22d3ee', // cyan
+  '#60a5fa', // blue
+  '#818cf8', // indigo
+  '#a78bfa', // violet
+  '#e879f9', // fuchsia
+  '#f87171', // red
+  '#a3e635', // lime
+  '#2dd4bf', // teal
+  '#38bdf8', // sky
+  '#c084fc', // purple
+  '#fb7185', // rose
+  '#fdba74', // amber
+  '#86efac', // light green
+  '#93c5fd', // light blue
+  '#fda4af', // light pink
+  '#6ee7b7', // light teal
+  '#fcd34d', // light yellow
+  '#d8b4fe', // light purple
+  '#67e8f9', // light cyan
+  '#bbf7d0', // mint
+  '#fecaca', // salmon
+  '#bfdbfe', // powder blue
+  '#ddd6fe', // lavender
+  '#fed7aa', // peach
+  '#fbbf24', // gold
+]
+
+// Tailwind 700 for the base hues; the lighter dark-mode variants use 800 so
+// they stay distinct from their 700 siblings.
+export const LIGHT_CATEGORY_PALETTE: readonly string[] = [
+  '#be185d', // pink-700
+  '#c2410c', // orange-700
+  '#a16207', // yellow-700
+  '#15803d', // green-700
+  '#047857', // emerald-700
+  '#0e7490', // cyan-700
+  '#1d4ed8', // blue-700
+  '#4338ca', // indigo-700
+  '#6d28d9', // violet-700
+  '#a21caf', // fuchsia-700
+  '#b91c1c', // red-700
+  '#4d7c0f', // lime-700
+  '#0f766e', // teal-700
+  '#0369a1', // sky-700
+  '#7e22ce', // purple-700
+  '#be123c', // rose-700
+  '#b45309', // amber-700
+  '#166534', // green-800
+  '#1e40af', // blue-800
+  '#9d174d', // pink-800
+  '#065f46', // emerald-800
+  '#854d0e', // yellow-800
+  '#6b21a8', // purple-800
+  '#155e75', // cyan-800
+  '#115e59', // teal-800
+  '#991b1b', // red-800
+  '#075985', // sky-800
+  '#5b21b6', // violet-800
+  '#9a3412', // orange-800
+  '#92400e', // amber-800
+]
+
+/** Maps category text to a stable palette index for repeatable colors. */
+export function getCategoryColor(category: string, mode: ThemeMode = 'dark'): string {
+  const palette = mode === 'light' ? LIGHT_CATEGORY_PALETTE : DARK_CATEGORY_PALETTE
+
+  // Deterministic index based on category name hash
+  let hash = 0
+  for (let i = 0; i < category.length; i++) {
+    hash = category.charCodeAt(i) + ((hash << 5) - hash)
+    hash = hash & hash // Convert to 32bit int
+  }
+
+  // Spread across palette using prime multiplication to avoid clustering
+  const index = Math.abs(hash * 2654435761) % palette.length
+  return palette[index]
+}
+
+export function useCategoryColor(category: string): string {
+  return useStylesStore((s) => getCategoryColor(category, s.themeMode))
+}
+
+/** Stable React key when the same name can appear from different CSV rows. */
+export function styleRowKey(s: Pick<Style, 'name' | 'source_file'>): string {
+  return `${s.source_file}\0${s.name}`
+}
+
+const THUMB_VERSION_LS_PREFIX = 'sg_thumb_v_'
+const EMPTY_STYLES: readonly Style[] = []
+
+function buildSelectedKeySet(styles: Style[]): ReadonlySet<string> {
+  return new Set(styles.map((s) => styleRowKey(s)))
+}
+
+function buildSelectedCountByCategory(styles: Style[]): ReadonlyMap<string, number> {
+  const counts = new Map<string, number>()
+  for (const s of styles) {
+    const cat = s.category
+    counts.set(cat, (counts.get(cat) ?? 0) + 1)
+  }
+  return counts
+}
+
+/** selectedKeySet + selectedCountByCategory — always rebuilt together. */
+function selectionDerived(styles: Style[]): {
+  selectedKeySet: ReadonlySet<string>
+  selectedCountByCategory: ReadonlyMap<string, number>
+} {
+  return {
+    selectedKeySet: buildSelectedKeySet(styles),
+    selectedCountByCategory: buildSelectedCountByCategory(styles),
+  }
+}
+
+function buildSearchTextByKey(styles: Style[]): ReadonlyMap<string, string> {
+  const out = new Map<string, string>()
+  for (const s of styles) {
+    out.set(styleRowKey(s), buildStyleSearchText(s))
+  }
+  return out
+}
+
+function keySetsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a.size !== b.size) return false
+  for (const key of b) {
+    if (!a.has(key)) return false
+  }
+  return true
+}
+
+function countMapsEqual(
+  a: ReadonlyMap<string, number>,
+  b: ReadonlyMap<string, number>,
+): boolean {
+  if (a.size !== b.size) return false
+  for (const [cat, n] of b) {
+    if (a.get(cat) !== n) return false
+  }
+  return true
+}
+
+/** Names with 2+ library rows; per-name arrays keep stable refs until `styles` changes. */
+function buildDuplicatesByName(styles: Style[]): Map<string, readonly Style[]> {
+  const buckets = new Map<string, Style[]>()
+  for (const s of styles) {
+    const list = buckets.get(s.name)
+    if (list) list.push(s)
+    else buckets.set(s.name, [s])
+  }
+  const out = new Map<string, readonly Style[]>()
+  for (const [name, list] of buckets) {
+    if (list.length > 1) out.set(name, list)
+  }
+  return out
+}
+
+/** One-shot hydrate of `sg_thumb_v_<styleRowKey>` → version string. */
+function loadThumbVersionsFromLs(): Record<string, string> {
+  const out: Record<string, string> = {}
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const lsKey = localStorage.key(i)
+      if (!lsKey || !lsKey.startsWith(THUMB_VERSION_LS_PREFIX)) continue
+      const version = localStorage.getItem(lsKey)
+      if (typeof version === 'string' && version.length > 0) {
+        out[lsKey.slice(THUMB_VERSION_LS_PREFIX.length)] = version
+      }
+    }
+  } catch {
+    // ignore corrupt / unavailable localStorage
+  }
+  return out
+}
+
+/** Preset style ref: legacy bare name, or backend-normalized {name, source_file, weight?}. */
+export type PresetStyleEntry = string | { name: string; source_file?: string; weight?: number }
+
+export function presetEntryName(entry: PresetStyleEntry): string | null {
+  if (typeof entry === 'string') return entry || null
+  if (!entry || typeof entry !== 'object' || typeof entry.name !== 'string') return null
+  return entry.name || null
+}
+
+/** Chip/card label: strip leading `Category_` prefix when present. */
+export function styleDisplayName(name: string): string {
+  return name.includes('_') ? name.split('_').slice(1).join(' ') : name
+}
+
+/** Default Save-set name: first two display names, then `+K` for the rest. */
+export function suggestPresetName(styles: Pick<Style, 'name'>[]): string {
+  if (styles.length === 0) return ''
+  const names = styles.map((s) => styleDisplayName(s.name))
+  if (names.length === 1) return names[0]
+  if (names.length === 2) return `${names[0]} + ${names[1]}`
+  return `${names[0]} + ${names[1]} +${names.length - 2}`
+}
+
+export function packBasename(sourceFile: string | undefined | null): string | null {
+  if (!sourceFile) return null
+  const base = sourceFile.replace(/\\/g, '/').split('/').pop() || sourceFile
+  return base.replace(/\.csv$/i, '') || null
+}
+
+export type PresetRecord = {
+  styles: PresetStyleEntry[]
+  created: string
+  wildcards?: WildcardRef[]
+  note?: string
+  last_used?: string
+}
+
+type StyleIdentity = Pick<Style, 'name' | 'source_file'>
+
+/** Resolve a preset styles[] entry to a library row (name+source, else name-only). */
+export function resolvePresetStyleEntry(
+  entry: PresetStyleEntry,
+  styles: Style[],
+  bySource: (s: Style) => boolean = () => true,
+): Style | undefined {
+  if (typeof entry === 'string') {
+    return styles.find((s) => s.name === entry && bySource(s))
+  }
+  if (!entry || typeof entry !== 'object' || typeof entry.name !== 'string' || !entry.name) {
+    return undefined
+  }
+  const name = entry.name
+  const source = typeof entry.source_file === 'string' ? entry.source_file : ''
+  if (source) {
+    const want = styleRowKey({ name, source_file: source })
+    const hit = styles.find((s) => styleRowKey(s) === want && bySource(s))
+    if (hit) return hit
+  }
+  return styles.find((s) => s.name === name && bySource(s))
+}
+
+export type ResolvedPresetMember =
+  | { status: 'found'; entry: PresetStyleEntry; style: Style }
+  | { status: 'missing'; entry: PresetStyleEntry; name: string; pack: string | null }
+
+export function resolvePresetMembers(
+  entries: PresetStyleEntry[],
+  styles: Style[],
+): ResolvedPresetMember[] {
+  return entries.map((entry) => {
+    const style = resolvePresetStyleEntry(entry, styles)
+    if (style) return { status: 'found' as const, entry, style }
+    const name = presetEntryName(entry) || '?'
+    const source =
+      typeof entry === 'object' && entry && typeof entry.source_file === 'string'
+        ? entry.source_file
+        : ''
+    return { status: 'missing' as const, entry, name, pack: packBasename(source) }
+  })
+}
+
+/** Safe localStorage JSON array read — never throws on corrupt data. */
+function loadStringArrayFromLs(key: string): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(key) || '[]')
+    if (!Array.isArray(raw)) return []
+    return raw.filter((x): x is string => typeof x === 'string')
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Upgrade legacy bare-name favorites/recent entries to styleRowKey composites.
+ * Entries that already contain '\0' are left as-is.
+ * Bare names resolve only when exactly one library row matches; ambiguous
+ * duplicates (same name in multiple source_file values) are dropped.
+ */
+export function migrateLegacyNameKeys(entries: string[], styles: Style[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const entry of entries) {
+    let key: string | null
+    if (entry.includes('\0')) {
+      key = entry
+    } else {
+      const matches = styles.filter((s) => s.name === entry)
+      key = matches.length === 1 ? styleRowKey(matches[0]) : null
+    }
+    if (key && !seen.has(key)) {
+      seen.add(key)
+      out.push(key)
+    }
+  }
+  return out
+}
+
+/** First occurrence wins; use only when the active source is "All sources". */
+export function dedupeStylesByNameForAllSources(styles: Style[]): Style[] {
+  const seen = new Set<string>()
+  return styles.filter((s) => {
+    if (seen.has(s.name)) return false
+    seen.add(s.name)
+    return true
+  })
+}
+
+const COMBOS_CONFLICTS_RE = /\b(?:Combos|Conflicts):\s*[^.]*\.?/gi
+
+function stripStyleReferences(description: string): string {
+  return description.replace(COMBOS_CONFLICTS_RE, '').trim()
+}
+
+function nameSearchText(style: Style): string {
+  const spaced = style.name.replace(/_/g, ' ')
+  const displayName = style.name.includes('_')
+    ? style.name.split('_').slice(1).join(' ')
+    : style.name
+  return [style.name, spaced, displayName].join(' ').toLowerCase()
+}
+
+function buildStyleSearchText(style: Style): string {
+  const cleanDescription = stripStyleReferences(style.description || '')
+  return [nameSearchText(style), cleanDescription].filter(Boolean).join(' ').toLowerCase()
+}
+
+function tokensMatchHaystack(haystack: string, rawQuery: string): boolean {
+  const query = rawQuery.trim().toLowerCase()
+  if (!query) return true
+  return query.split(/\s+/).filter(Boolean).every((token) => haystack.includes(token))
+}
+
+/** AND-token match against name/description haystack (uses searchTextByKey when present). */
+export function matchesSearch(style: Style, rawQuery: string): boolean {
+  const key = styleRowKey(style)
+  const cached = useStylesStore.getState().searchTextByKey.get(key)
+  return tokensMatchHaystack(cached ?? buildStyleSearchText(style), rawQuery)
+}
+
+/** Same AND-token semantics as matchesSearch, keyed via searchTextByKey. */
+export function matchesSearchKey(key: string, rawQuery: string): boolean {
+  const haystack = useStylesStore.getState().searchTextByKey.get(key) ?? ''
+  return tokensMatchHaystack(haystack, rawQuery)
+}
+
+/** Map persisted or UI source string to an entry in `sources` (exact match, else basename). */
+function resolveSourceInList(sources: string[], preferred: string | null): string | null {
+  if (!preferred || sources.length === 0) return null
+  if (sources.includes(preferred)) return preferred
+  const key = (s: string) => {
+    const base = s.replace(/\\/g, '/').split('/').pop() ?? s
+    return base.replace(/\.csv$/i, '').toLowerCase()
+  }
+  const k = key(preferred)
+  const found = sources.find((s) => key(s) === k)
+  return found ?? null
+}
+
+/**
+ * Values of `activeCategory` that are sidebar “special” views (not real CSV categories).
+ * Matches Favorites / Recent; use the same checks in grid layout as those.
+ */
+export type ActiveSpecialView = '★ Favorites' | '🕑 Recent' | 'presets'
+
+/** Central UI state for style filtering, selection, and host-side actions. */
+interface StylesStore {
+  toasts: { id: number; message: string; variant: 'success' | 'error' | 'info' }[]
+  // Data
+  styles: Style[]
+  tab: Tab
+  
+  // Filters
+  search: string
+  activeCategory: string | null
+  sources: string[]
+  activeSource: string | null
+  
+  // Selection
+  selectedStyles: Style[]
+  /** styleRowKey set for `selectedStyles`; rebuilt in the same set() as selection. */
+  selectedKeySet: ReadonlySet<string>
+  /** category → selected count; rebuilt in the same set() as selectedKeySet. */
+  selectedCountByCategory: ReadonlyMap<string, number>
+  /** styleRowKey → lowercased search haystack; rebuilt only when `styles` change. */
+  searchTextByKey: ReadonlyMap<string, string>
+  /** Name → rows sharing that name (length ≥ 2); rebuilt when `styles` changes. */
+  duplicatesByName: ReadonlyMap<string, readonly Style[]>
+  /** Cache-bust versions keyed by styleRowKey; hydrated once from sg_thumb_v_* LS keys. */
+  thumbVersions: Readonly<Record<string, string>>
+  bumpThumbVersion: (key: string, version: string) => void
+  /** Collapsed category names in the All/Categories views. */
+  collapsedCategories: Set<string>
+  compactMode: boolean
+  themeMode: ThemeMode
+  /** Favorite style row keys (styleRowKey) persisted in data/favorites.json. */
+  favorites: Set<string>
+  /** Most recently applied style row keys (styleRowKey, max 10) in data/recent.json. */
+  recentNames: string[]
+  /** True after the first server hydrate (migrate-once + load) finishes. */
+  favoritesRecentHydrated: boolean
+  /** Detected conflicts among current selected styles. */
+  conflicts: Conflict[]
+  /** User-defined category order for All Sources view. */
+  categoryOrder: string[]
+  /** Saved style presets from backend (`GET /style_grid/presets`). */
+  presets: Record<string, PresetRecord>
+  /**
+   * When set, presets.json is corrupt — show a blocking banner and disable
+   * preset save/rename/delete/touch until the user restores from `.bak`.
+   */
+  presetsCorrupt: CorruptDataInfo | null
+  /** Last preset loaded via Apply; used for Save-set name/note prefill. */
+  activePresetName: string | null
+  /** Which sources (a preset name, or the literal 'manual') currently
+   * want each selected style present. Keys are styleRowKey composites.
+   * A style with an empty/absent set has no reason to stay selected once
+   * a preset stops wanting it. */
+  styleContributors: Record<string, Set<string>>
+
+  // Actions
+  setStyles: (styles: Style[], tab: Tab) => void
+  setSearch: (q: string) => void
+  setCategory: (cat: string | null) => void
+  setActiveSource: (src: string | null) => void
+  toggleCompact: () => void
+  setThemeMode: (mode: ThemeMode) => void
+  toggleCollapse: (cat: string) => void
+  collapseAll: () => void
+  expandAll: () => void
+  selectAllInCategory: (cat: string) => void
+  toggleStyle: (style: Style) => void
+  setSelectedStyles: (styles: Style[]) => void
+  clearAll: () => void
+  /**
+   * Host SG_CLEAR_SELECTION chrome reset: clears selection + key set, conflicts,
+   * wildcards, active preset, and contributors. Does not send SG_UNAPPLY (host
+   * already cleared the prompt). Prefer this over raw setState.
+   */
+  clearSelectionChrome: () => void
+  activeWildcards: WildcardRef[]
+  setActiveWildcards: (refs: WildcardRef[]) => void
+  removeWildcard: (ref: WildcardRef) => void
+  /** When set, the grid is picking styles for a `{sg|sgd:category:spec}` slice. */
+  sliceMode: { category: string; kind: WildcardKind } | null
+  /** Full style names selected for the current slice. */
+  sliceSelection: string[]
+  startSliceMode: (category: string, kind?: WildcardKind) => void
+  exitSliceMode: () => void
+  toggleSliceSelection: (name: string) => void
+  /** Select all currently visible (search/filter-applied) names — caller supplies the list. */
+  selectAllSlice: (names: string[]) => void
+  clearSliceSelection: () => void
+  showToast: (message: string, variant?: 'success' | 'error' | 'info') => void
+  detectConflicts: () => void
+  setCategoryOrder: (order: string[]) => void
+  toggleFavorite: (style: StyleIdentity) => void
+  isFavorite: (style: StyleIdentity) => boolean
+  addToRecent: (style: StyleIdentity) => void
+  /**
+   * Load favorites/recent from the server. When the server file is absent and
+   * legacy `sg_v2_*` localStorage keys have data, push them once (migrate),
+   * then treat the server as source of truth.
+   */
+  hydrateFavoritesRecent: () => Promise<void>
+  fetchPresets: () => Promise<void>
+  savePreset: (
+    name: string,
+    styles: PresetStyleEntry[],
+    opts?: {
+      overwrite?: boolean
+      wildcards?: WildcardRef[]
+      note?: string
+    },
+  ) => Promise<{ ok: true } | { ok: false; error?: string }>
+  deletePreset: (
+    name: string,
+  ) => Promise<{ ok: true } | { ok: false; error?: string }>
+  renamePreset: (
+    oldName: string,
+    newName: string,
+    opts?: { overwrite?: boolean },
+  ) => Promise<{ ok: true } | { ok: false; error?: string }>
+  touchPreset: (name: string) => Promise<void>
+  /**
+   * Merge preset styles/wildcards into the current selection
+   * (SG_APPLY / SG_WILDCARD_*). The host no longer has its own
+   * preset-loading path. Toolbar Eraser still uses SG_CLEAR_ALL.
+   */
+  loadPreset: (name: string) => void
+  unapplyPreset: (name: string) => void
+
+  // Derived
+  categories: () => string[]
+}
+
+export function selectFilteredStyles(
+  styles: Style[],
+  search: string,
+  activeCategory: string | null,
+  activeSource: string | null,
+  favorites: Set<string>,
+  recentNames: string[],
+): Style[] {
+  const bySource = (s: Style) => !activeSource || s.source_file === activeSource
+
+  if (activeCategory === '★ Favorites') {
+    return styles.filter(
+      (s) => favorites.has(styleRowKey(s)) && bySource(s) && matchesSearchKey(styleRowKey(s), search),
+    )
+  }
+
+  if (activeCategory === '🕑 Recent') {
+    return recentNames
+      .map((key) => styles.find((s) => styleRowKey(s) === key && bySource(s)))
+      .filter(Boolean)
+      .filter((s) => matchesSearchKey(styleRowKey(s as Style), search)) as Style[]
+  }
+
+  if (activeCategory === LORA_VIEW) {
+    return styles.filter(
+      (s) => s.source_file === LORA_SOURCE && matchesSearchKey(styleRowKey(s), search),
+    )
+  }
+
+  let filtered = styles.filter((s) => {
+    const matchCat = !activeCategory || s.category === activeCategory
+    return (
+      s.source_file !== LORA_SOURCE &&
+      bySource(s) &&
+      matchCat &&
+      matchesSearchKey(styleRowKey(s), search)
+    )
+  })
+
+  if (!activeSource) {
+    filtered = dedupeStylesByNameForAllSources(filtered)
+  }
+
+  return filtered
+}
+
+export const useStylesStore = create<StylesStore>((set, get) => ({
+  toasts: [],
+  styles: [],
+  tab: 'txt2img',
+  search: '',
+  activeCategory: null,
+  activeSource: null,
+  sources: [],
+  selectedStyles: [],
+  selectedKeySet: new Set(),
+  selectedCountByCategory: new Map(),
+  searchTextByKey: new Map(),
+  duplicatesByName: new Map(),
+  thumbVersions: loadThumbVersionsFromLs(),
+  conflicts: [],
+  categoryOrder: JSON.parse(
+    localStorage.getItem('sg_v2_category_order') || '[]'
+  ) as string[],
+  collapsedCategories: new Set(),
+  compactMode: false,
+  themeMode: 'dark',
+  favorites: new Set(),
+  recentNames: [],
+  favoritesRecentHydrated: false,
+  presets: {},
+  presetsCorrupt: null,
+  activePresetName: null,
+  styleContributors: {},
+
+  bumpThumbVersion: (key, version) => {
+    localStorage.setItem(`${THUMB_VERSION_LS_PREFIX}${key}`, version)
+    set((s) => ({
+      thumbVersions: { ...s.thumbVersions, [key]: version },
+    }))
+  },
+
+  setStyles: (styles, tab) => {
+    const sources = [...new Set(
+      styles.filter(s => s.source_file !== LORA_SOURCE).map(s => s.source_file).filter(Boolean)
+    )].sort()
+
+    // Restore selection: exact match can fail when host path strings differ from LS (basename must match)
+    const lastSourceKey = `sg_v2_last_source_${tab}`
+    const lastSource =
+      localStorage.getItem(lastSourceKey) ??
+      localStorage.getItem('sg_v2_last_source') // legacy global (pre per-tab)
+    const prevActive = get().activeSource
+    const activeSource =
+      resolveSourceInList(sources, prevActive) ??
+      resolveSourceInList(sources, lastSource)
+
+    const prevFavs = [...get().favorites]
+    const prevRecent = get().recentNames
+    const nextFavs = migrateLegacyNameKeys(prevFavs, styles)
+    const nextRecent = migrateLegacyNameKeys(prevRecent, styles)
+    const favsChanged =
+      nextFavs.length !== prevFavs.length || nextFavs.some((k, i) => k !== prevFavs[i])
+    const recentChanged =
+      nextRecent.length !== prevRecent.length || nextRecent.some((k, i) => k !== prevRecent[i])
+    if (favsChanged && get().favoritesRecentHydrated) {
+      try {
+        void styleGridPost('/style_grid/favorites/save', { items: nextFavs }).catch(() => {})
+      } catch {
+        // fetch unavailable
+      }
+    }
+    if (recentChanged && get().favoritesRecentHydrated) {
+      try {
+        void styleGridPost('/style_grid/recent/save', { items: nextRecent }).catch(() => {})
+      } catch {
+        // fetch unavailable
+      }
+    }
+
+    set({
+      styles,
+      tab,
+      sources,
+      activeSource,
+      duplicatesByName: buildDuplicatesByName(styles),
+      searchTextByKey: buildSearchTextByKey(styles),
+      ...(favsChanged ? { favorites: new Set(nextFavs) } : {}),
+      ...(recentChanged ? { recentNames: nextRecent } : {}),
+    })
+    if (activeSource) {
+      localStorage.setItem(lastSourceKey, activeSource)
+    } else {
+      localStorage.removeItem(lastSourceKey)
+    }
+    localStorage.removeItem('sg_v2_last_source')
+    // Always notify — including All (null) so Gradio clears a stale source path
+    sendToHost({ type: 'SG_SOURCE_CHANGE', source: activeSource })
+  },
+  setSearch: (search) => set({ search }),
+  setCategory: (activeCategory) => set({ activeCategory }),
+  setActiveSource: (activeSource) => {
+    const tab = get().tab
+    const lastSourceKey = `sg_v2_last_source_${tab}`
+    if (activeSource) {
+      localStorage.setItem(lastSourceKey, activeSource)
+    } else {
+      localStorage.removeItem(lastSourceKey)
+    }
+    localStorage.removeItem('sg_v2_last_source')
+    set({ activeSource })
+    sendToHost({ type: 'SG_SOURCE_CHANGE', source: activeSource })
+  },
+  toggleCompact: () => set((s) => ({ compactMode: !s.compactMode })),
+  setThemeMode: (themeMode) => set({ themeMode }),
+  toggleCollapse: (cat) => set((s) => {
+    const next = new Set(s.collapsedCategories)
+    if (next.has(cat)) next.delete(cat)
+    else next.add(cat)
+    return { collapsedCategories: next }
+  }),
+  collapseAll: () => {
+    const { styles, activeSource } = get()
+    const src = activeSource
+      ? styles.filter(s => s.source_file === activeSource)
+      : styles
+    const cats = [...new Set(src.map(s => s.category).filter(Boolean))]
+    set({ collapsedCategories: new Set(cats) })
+  },
+  expandAll: () => set({ collapsedCategories: new Set() }),
+  selectAllInCategory: (cat) => {
+    const { styles, activeSource, selectedStyles } = get()
+    const src = activeSource
+      ? styles.filter(s => s.source_file === activeSource)
+      : styles
+    const catStyles = src.filter(s => s.category === cat)
+    const allSelected = catStyles.every(s =>
+      selectedStyles.some(sel => styleRowKey(sel) === styleRowKey(s))
+    )
+
+    if (allSelected) {
+      const removeKeys = new Set(catStyles.map(s => styleRowKey(s)))
+      const nextSelected = selectedStyles.filter(s => !removeKeys.has(styleRowKey(s)))
+      set({
+        selectedStyles: nextSelected,
+        ...selectionDerived(nextSelected),
+      })
+      catStyles.forEach((style) => {
+        sendToHost({
+          type: 'SG_UNAPPLY',
+          styleId: style.name,
+          source_file: style.source_file,
+        })
+      })
+      get().detectConflicts()
+      return
+    }
+
+    const selectedKeys = new Set(selectedStyles.map(s => styleRowKey(s)))
+    const toAdd = catStyles.filter(s => !selectedKeys.has(styleRowKey(s)))
+    if (toAdd.length === 0) return
+
+    const nextSelected = [...selectedStyles, ...toAdd]
+    set({
+      selectedStyles: nextSelected,
+      ...selectionDerived(nextSelected),
+    })
+    toAdd.forEach((style) => {
+      get().addToRecent(style)
+      sendToHost({
+        type: 'SG_APPLY',
+        styleId: style.name,
+        prompt: style.prompt,
+        neg: style.negative_prompt,
+        source_file: style.source_file,
+      })
+    })
+    get().detectConflicts()
+  },
+  toggleFavorite: (style) => {
+    const key = styleRowKey(style)
+    const favs = new Set(get().favorites)
+    if (favs.has(key)) favs.delete(key)
+    else favs.add(key)
+    const items = [...favs]
+    set({ favorites: favs })
+    try {
+      void styleGridPost('/style_grid/favorites/save', { items }).catch(() => {})
+    } catch {
+      // fetch unavailable (unit tests / offline)
+    }
+  },
+  isFavorite: (style) => get().favorites.has(styleRowKey(style)),
+  addToRecent: (style) => {
+    const key = styleRowKey(style)
+    const prev = get().recentNames
+    // Already at head — keep the same array ref (Sidebar Recent badge skips no-op).
+    if (prev[0] === key) return
+    const recent = [key, ...prev.filter((n) => n !== key)].slice(0, 10)
+    set({ recentNames: recent })
+    try {
+      void styleGridPost('/style_grid/recent/save', { items: recent }).catch(() => {})
+    } catch {
+      // fetch unavailable (unit tests / offline)
+    }
+  },
+  hydrateFavoritesRecent: async () => {
+    /**
+     * Only remove migration-source LS keys after the server confirms persistence
+     * (`persisted: true` on GET, or a successful migrate POST). Never wipe
+     * `sg_v2_favorites` / `sg_v2_recent` while they are still the only copy.
+     */
+    const removeLegacyKey = (lsKey: string, canRemove: boolean) => {
+      if (!canRemove) return
+      try {
+        localStorage.removeItem(lsKey)
+      } catch {
+        // ignore unavailable storage
+      }
+    }
+
+    const hydrateOne = async (
+      getUrl: string,
+      migrateUrl: string,
+      lsKey: 'sg_v2_favorites' | 'sg_v2_recent',
+    ): Promise<{ items: string[]; canRemoveLegacy: boolean }> => {
+      try {
+        const r = await fetch(getUrl)
+        if (!r.ok) {
+          return { items: loadStringArrayFromLs(lsKey), canRemoveLegacy: false }
+        }
+        const body = (await r.json().catch(() => null)) as {
+          items?: unknown
+          persisted?: unknown
+        } | null
+        const serverItems = Array.isArray(body?.items)
+          ? body.items.filter((x): x is string => typeof x === 'string' && x.length > 0)
+          : []
+        const persisted = body?.persisted === true
+        if (persisted) {
+          return { items: serverItems, canRemoveLegacy: true }
+        }
+
+        const legacy = loadStringArrayFromLs(lsKey)
+        if (legacy.length === 0) {
+          // Nothing to migrate; safe to treat as already pruned.
+          return { items: [], canRemoveLegacy: true }
+        }
+
+        const mig = await styleGridPost(migrateUrl, { items: legacy })
+        if (!mig.ok) {
+          return { items: legacy, canRemoveLegacy: false }
+        }
+        const migBody = (await mig.json().catch(() => null)) as {
+          items?: unknown
+          migrated?: unknown
+        } | null
+        if (Array.isArray(migBody?.items)) {
+          return {
+            items: migBody.items.filter((x): x is string => typeof x === 'string' && x.length > 0),
+            canRemoveLegacy: true,
+          }
+        }
+        if (migBody?.migrated === true) {
+          return { items: legacy, canRemoveLegacy: true }
+        }
+        return { items: legacy, canRemoveLegacy: false }
+      } catch {
+        return { items: loadStringArrayFromLs(lsKey), canRemoveLegacy: false }
+      }
+    }
+
+    const [fav, recent] = await Promise.all([
+      hydrateOne('/style_grid/favorites', '/style_grid/favorites/migrate', 'sg_v2_favorites'),
+      hydrateOne('/style_grid/recent', '/style_grid/recent/migrate', 'sg_v2_recent'),
+    ])
+    removeLegacyKey('sg_v2_favorites', fav.canRemoveLegacy)
+    removeLegacyKey('sg_v2_recent', recent.canRemoveLegacy)
+    set({
+      favorites: new Set(fav.items),
+      recentNames: recent.items.slice(0, 10),
+      favoritesRecentHydrated: true,
+    })
+  },
+
+  toggleStyle: (style) => {
+    const { selectedStyles, styleContributors } = get()
+    const key = styleRowKey(style)
+    const isSelected = selectedStyles.some(s => styleRowKey(s) === key)
+
+    if (isSelected) {
+      const nextContributors = { ...styleContributors }
+      delete nextContributors[key]
+      const nextSelected = selectedStyles.filter(s => styleRowKey(s) !== key)
+      set({
+        selectedStyles: nextSelected,
+        ...selectionDerived(nextSelected),
+        styleContributors: nextContributors,
+      })
+      sendToHost({
+        type: 'SG_UNAPPLY',
+        styleId: style.name,
+        source_file: style.source_file,
+      })
+      get().detectConflicts()
+    } else {
+      const existing = styleContributors[key] ?? new Set<string>()
+      const nextSelected = [...selectedStyles, style]
+      set({
+        selectedStyles: nextSelected,
+        ...selectionDerived(nextSelected),
+        styleContributors: {
+          ...styleContributors,
+          [key]: new Set([...existing, 'manual']),
+        },
+      })
+      get().addToRecent(style)
+      sendToHost({
+        type: 'SG_APPLY',
+        styleId: style.name,
+        prompt: style.prompt,
+        neg: style.negative_prompt,
+        source_file: style.source_file,
+      })
+      get().detectConflicts()
+    }
+  },
+  setSelectedStyles: (styles: Style[]) => set({
+    selectedStyles: styles,
+    ...selectionDerived(styles),
+  }),
+  clearAll: () => {
+    const { selectedStyles } = get()
+    selectedStyles.forEach(s =>
+      sendToHost({
+        type: 'SG_UNAPPLY',
+        styleId: s.name,
+        source_file: s.source_file,
+      })
+    )
+    set({
+      selectedStyles: [],
+      selectedKeySet: new Set(),
+      selectedCountByCategory: new Map(),
+      conflicts: [],
+      activePresetName: null,
+      styleContributors: {},
+    })
+  },
+  clearSelectionChrome: () => {
+    set({
+      selectedStyles: [],
+      selectedKeySet: new Set(),
+      selectedCountByCategory: new Map(),
+      conflicts: [],
+      activeWildcards: [],
+      activePresetName: null,
+      styleContributors: {},
+    })
+  },
+  activeWildcards: [],
+  setActiveWildcards: (refs) => set({ activeWildcards: refs }),
+  removeWildcard: (ref) => {
+    const targetKey = wildcardKey(ref.category, ref.spec, ref.kind)
+    set((s) => ({
+      activeWildcards: s.activeWildcards.filter(
+        (c) => wildcardKey(c.category, c.spec, c.kind) !== targetKey,
+      ),
+    }))
+    sendToHost({
+      type: 'SG_REMOVE_WILDCARD',
+      category: ref.category,
+      spec: ref.spec ?? '',
+      ...(ref.kind === WILDCARD_KIND_DECK ? { kind: WILDCARD_KIND_DECK } : {}),
+    })
+  },
+  sliceMode: null,
+  sliceSelection: [],
+  startSliceMode: (category, kind = WILDCARD_KIND_DICE) => set({
+    sliceMode: { category, kind },
+    sliceSelection: [],
+  }),
+  exitSliceMode: () => set({ sliceMode: null, sliceSelection: [] }),
+  toggleSliceSelection: (name) => set((s) => {
+    const has = s.sliceSelection.includes(name)
+    return {
+      sliceSelection: has
+        ? s.sliceSelection.filter((n) => n !== name)
+        : [...s.sliceSelection, name],
+    }
+  }),
+  selectAllSlice: (names) => set({ sliceSelection: [...names] }),
+  clearSliceSelection: () => set({ sliceSelection: [] }),
+  showToast: (message, variant = 'info') => {
+    const id = Date.now()
+    set((s) => ({ toasts: [...s.toasts, { id, message, variant }] }))
+    const ttl = variant === 'error' ? TOAST_ERROR_TTL_MS : TOAST_TTL_MS
+    setTimeout(() => set((s) => ({
+      toasts: s.toasts.filter(t => t.id !== id)
+    })), ttl)
+  },
+  detectConflicts: () => {
+    // Exact-set match (aligned with former server detect_conflicts / V1 checkConflictsLocal):
+    // comma-split → trim → lower → Set membership; skip empty and "{prompt}".
+    const { selectedStyles } = get()
+    const conflicts: Conflict[] = []
+
+    const tokenize = (text: string): Set<string> => {
+      const out = new Set<string>()
+      for (const raw of (text || '').split(',')) {
+        const t = raw.trim().toLowerCase()
+        if (t && t !== '{prompt}') out.add(t)
+      }
+      return out
+    }
+
+    const tokenMap = selectedStyles.map((s) => ({
+      name: s.name,
+      key: styleRowKey(s),
+      pos: tokenize(s.prompt || ''),
+      neg: tokenize(s.negative_prompt || ''),
+    }))
+
+    for (let i = 0; i < tokenMap.length; i++) {
+      for (let j = i + 1; j < tokenMap.length; j++) {
+        const a = tokenMap[i]
+        const b = tokenMap[j]
+
+        const aKillsB = [...b.pos].some((tag) => a.neg.has(tag))
+        const bKillsA = [...a.pos].some((tag) => b.neg.has(tag))
+
+        if (aKillsB) conflicts.push({
+          styleA: a.name, styleB: b.name,
+          styleAKey: a.key, styleBKey: b.key,
+          reason: `${a.name} negates tags from ${b.name}`
+        })
+        if (bKillsA) conflicts.push({
+          styleA: b.name, styleB: a.name,
+          styleAKey: b.key, styleBKey: a.key,
+          reason: `${b.name} negates tags from ${a.name}`
+        })
+      }
+    }
+    set({ conflicts })
+  },
+  fetchPresets: async () => {
+    const parse = (raw: unknown): Record<string, PresetRecord> =>
+      raw && typeof raw === 'object' && !Array.isArray(raw)
+        ? raw as Record<string, PresetRecord>
+        : {}
+    try {
+      const r = await fetch('/style_grid/presets')
+      const body = await r.json().catch(() => ({}))
+      const corrupt = parseCorruptData(r, body)
+      if (corrupt) {
+        set({ presetsCorrupt: corrupt, presets: {} })
+        return
+      }
+      if (!r.ok) return
+      set({ presets: parse(body), presetsCorrupt: null })
+    } catch {
+      // ignore
+    }
+  },
+  savePreset: async (name, styles, opts) => {
+    if (get().presetsCorrupt) {
+      return { ok: false as const, error: 'corrupt_data' }
+    }
+    try {
+      const res = await styleGridPost('/style_grid/presets/save', {
+        name,
+        styles,
+        wildcards: opts?.wildcards ?? [],
+        note: opts?.note ?? '',
+        overwrite: Boolean(opts?.overwrite),
+      })
+      const data = await res.json().catch(() => ({}))
+      const corrupt = parseCorruptData(res, data)
+      if (corrupt) {
+        set({ presetsCorrupt: corrupt })
+        return { ok: false as const, error: 'corrupt_data' }
+      }
+      if (!res.ok || data.ok === false || data.error) {
+        return {
+          ok: false as const,
+          error: typeof data.error === 'string' ? data.error : undefined,
+        }
+      }
+      if (data.presets) {
+        set({ presets: data.presets })
+      } else {
+        await get().fetchPresets()
+      }
+      const nextContributors = { ...get().styleContributors }
+      const library = get().styles
+      for (const entry of styles) {
+        const resolved = resolvePresetStyleEntry(entry, library)
+        const key = resolved
+          ? styleRowKey(resolved)
+          : (() => {
+              const n = presetEntryName(entry)
+              if (!n) return null
+              const src =
+                typeof entry === 'object' && entry && typeof entry.source_file === 'string'
+                  ? entry.source_file
+                  : ''
+              return src ? styleRowKey({ name: n, source_file: src }) : null
+            })()
+        if (!key) continue
+        const existing = nextContributors[key] ?? new Set<string>()
+        const next = new Set(existing)
+        next.delete('manual')
+        next.add(name)
+        nextContributors[key] = next
+      }
+      set({ styleContributors: nextContributors })
+      return { ok: true as const }
+    } catch {
+      return { ok: false as const }
+    }
+  },
+  deletePreset: async (name) => {
+    if (get().presetsCorrupt) {
+      return { ok: false as const, error: 'corrupt_data' }
+    }
+    try {
+      const res = await styleGridPost('/style_grid/presets/delete', { name })
+      const data = await res.json().catch(() => ({}))
+      const corrupt = parseCorruptData(res, data)
+      if (corrupt) {
+        set({ presetsCorrupt: corrupt })
+        return { ok: false as const, error: 'corrupt_data' }
+      }
+      if (!res.ok || data.ok === false || data.error) {
+        return {
+          ok: false as const,
+          error: typeof data.error === 'string' ? data.error : undefined,
+        }
+      }
+      const nextContributors = { ...get().styleContributors }
+      const toRemove = new Set<string>()
+      for (const [rowKey, contributors] of Object.entries(nextContributors)) {
+        if (!contributors.has(name)) continue
+        const next = new Set(contributors)
+        next.delete(name)
+        if (next.size === 0) {
+          toRemove.add(rowKey)
+          delete nextContributors[rowKey]
+        } else {
+          nextContributors[rowKey] = next
+        }
+      }
+      const selected = get().selectedStyles
+      toRemove.forEach((rowKey) => {
+        const style = selected.find((s) => styleRowKey(s) === rowKey)
+        if (style) {
+          sendToHost({
+            type: 'SG_UNAPPLY',
+            styleId: style.name,
+            source_file: style.source_file,
+          })
+        }
+      })
+      const nextSelected = selected.filter((s) => !toRemove.has(styleRowKey(s)))
+      if (data.presets) {
+        set({
+          presets: data.presets,
+          selectedStyles: nextSelected,
+          ...selectionDerived(nextSelected),
+          styleContributors: nextContributors,
+          ...(get().activePresetName === name ? { activePresetName: null } : {}),
+        })
+      } else {
+        set({
+          selectedStyles: nextSelected,
+          ...selectionDerived(nextSelected),
+          styleContributors: nextContributors,
+        })
+        if (get().activePresetName === name) {
+          set({ activePresetName: null })
+        }
+        await get().fetchPresets()
+      }
+      if (toRemove.size > 0) get().detectConflicts()
+      return { ok: true as const }
+    } catch {
+      return { ok: false as const }
+    }
+  },
+  renamePreset: async (oldName, newName, opts) => {
+    if (get().presetsCorrupt) {
+      return { ok: false as const, error: 'corrupt_data' }
+    }
+    try {
+      const res = await styleGridPost('/style_grid/presets/rename', {
+        old_name: oldName,
+        new_name: newName,
+        overwrite: Boolean(opts?.overwrite),
+      })
+      const data = await res.json().catch(() => ({}))
+      const corrupt = parseCorruptData(res, data)
+      if (corrupt) {
+        set({ presetsCorrupt: corrupt })
+        return { ok: false as const, error: 'corrupt_data' }
+      }
+      if (!res.ok || data.ok === false || data.error) {
+        return {
+          ok: false as const,
+          error: typeof data.error === 'string' ? data.error : undefined,
+        }
+      }
+      if (data.presets) {
+        set({
+          presets: data.presets,
+          ...(get().activePresetName === oldName ? { activePresetName: newName } : {}),
+        })
+      } else {
+        if (get().activePresetName === oldName) {
+          set({ activePresetName: newName })
+        }
+        await get().fetchPresets()
+      }
+      const nextContributors = { ...get().styleContributors }
+      for (const [styleName, contributors] of Object.entries(nextContributors)) {
+        if (!contributors.has(oldName)) continue
+        const next = new Set(contributors)
+        next.delete(oldName)
+        next.add(newName)
+        nextContributors[styleName] = next
+      }
+      set({ styleContributors: nextContributors })
+      return { ok: true as const }
+    } catch {
+      return { ok: false as const }
+    }
+  },
+  touchPreset: async (name) => {
+    if (get().presetsCorrupt) return
+    try {
+      const res = await styleGridPost('/style_grid/presets/touch', { name })
+      const data = await res.json().catch(() => ({}))
+      const corrupt = parseCorruptData(res, data)
+      if (corrupt) {
+        set({ presetsCorrupt: corrupt })
+        return
+      }
+      if (data.presets) {
+        set({ presets: data.presets })
+      }
+    } catch {
+      // ignore
+    }
+  },
+  // React-orchestrated merge apply (host owns prompt via SG_APPLY / SG_WILDCARD_*).
+  loadPreset: (name) => {
+    const preset = get().presets[name]
+    if (!preset) return
+    const { styles, showToast, detectConflicts, addToRecent } = get()
+
+    const members = resolvePresetMembers(preset.styles ?? [], styles)
+    const found = members.filter((m): m is Extract<ResolvedPresetMember, { status: 'found' }> =>
+      m.status === 'found')
+    const missing = members.filter((m) => m.status === 'missing')
+
+    const selected = [...get().selectedStyles]
+    const selectedKeys = new Set(selected.map((s) => styleRowKey(s)))
+    const nextContributors = { ...get().styleContributors }
+    for (const m of found) {
+      const rowKey = styleRowKey(m.style)
+      const existing = nextContributors[rowKey] ?? new Set<string>()
+      nextContributors[rowKey] = new Set([...existing, name])
+
+      if (selectedKeys.has(rowKey)) continue
+      selectedKeys.add(rowKey)
+      selected.push(m.style)
+      addToRecent(m.style)
+      sendToHost({
+        type: 'SG_APPLY',
+        styleId: m.style.name,
+        prompt: m.style.prompt,
+        neg: m.style.negative_prompt,
+        source_file: m.style.source_file,
+      })
+    }
+    set({
+      selectedStyles: selected,
+      ...selectionDerived(selected),
+      activePresetName: name,
+      styleContributors: nextContributors,
+    })
+    detectConflicts()
+
+    const activeWc = [...get().activeWildcards]
+    const activeWcKeys = new Set(
+      activeWc.map((w) => wildcardKey(w.category, w.spec, w.kind)),
+    )
+    for (const wc of preset.wildcards ?? []) {
+      const cat = String(wc.category || '')
+      if (!cat) continue
+      const spec = String(wc.spec || '')
+      const kind = wc.kind === WILDCARD_KIND_DECK ? WILDCARD_KIND_DECK : undefined
+      const key = wildcardKey(cat, spec, kind)
+      if (activeWcKeys.has(key)) continue
+      activeWcKeys.add(key)
+      if (spec) {
+        sendToHost(
+          kind
+            ? { type: 'SG_WILDCARD_SLICE', category: cat, spec, kind }
+            : { type: 'SG_WILDCARD_SLICE', category: cat, spec },
+        )
+      } else {
+        sendToHost(
+          kind
+            ? { type: 'SG_WILDCARD_CATEGORY', category: cat, kind }
+            : { type: 'SG_WILDCARD_CATEGORY', category: cat },
+        )
+      }
+    }
+
+    void get().touchPreset(name)
+
+    if (missing.length > 0) {
+      showToast(
+        `Loaded ${found.length} of ${members.length} styles (${missing.length} missing)`,
+        'info',
+      )
+    }
+  },
+  unapplyPreset: (name) => {
+    const preset = get().presets[name]
+    if (!preset) return
+    const { styles, selectedStyles, activeWildcards, styleContributors, detectConflicts } = get()
+
+    const members = resolvePresetMembers(preset.styles ?? [], styles)
+    const found = members.filter((m): m is Extract<ResolvedPresetMember, { status: 'found' }> =>
+      m.status === 'found')
+
+    const nextContributors = { ...styleContributors }
+    const toRemove = new Set<string>()
+    for (const m of found) {
+      const rowKey = styleRowKey(m.style)
+      const set_ = nextContributors[rowKey]
+      if (!set_) continue
+      const next = new Set(set_)
+      next.delete(name)
+      if (next.size === 0) {
+        toRemove.add(rowKey)
+        delete nextContributors[rowKey]
+      } else {
+        nextContributors[rowKey] = next
+      }
+    }
+
+    toRemove.forEach((rowKey) => {
+      const style =
+        selectedStyles.find((s) => styleRowKey(s) === rowKey) ||
+        found.find((m) => styleRowKey(m.style) === rowKey)?.style
+      if (style) {
+        sendToHost({
+          type: 'SG_UNAPPLY',
+          styleId: style.name,
+          source_file: style.source_file,
+        })
+      }
+    })
+    const nextSelected = selectedStyles.filter((s) => !toRemove.has(styleRowKey(s)))
+
+    // Wildcards: simplified scope — this preset's own wildcards are
+    // removed unconditionally, without cross-preset attribution.
+    const presetWcKeys = new Set(
+      (preset.wildcards ?? []).map((wc) =>
+        wildcardKey(String(wc.category || ''), String(wc.spec || ''), wc.kind),
+      ),
+    )
+    const wcToRemove = activeWildcards.filter((w) =>
+      presetWcKeys.has(wildcardKey(w.category, w.spec, w.kind)),
+    )
+    const nextActiveWildcards = activeWildcards.filter(
+      (w) => !presetWcKeys.has(wildcardKey(w.category, w.spec, w.kind)),
+    )
+    wcToRemove.forEach((w) => {
+      sendToHost({
+        type: 'SG_REMOVE_WILDCARD',
+        category: w.category,
+        spec: w.spec ?? '',
+        ...(w.kind === WILDCARD_KIND_DECK ? { kind: WILDCARD_KIND_DECK } : {}),
+      })
+    })
+
+    set({
+      selectedStyles: nextSelected,
+      ...selectionDerived(nextSelected),
+      activeWildcards: nextActiveWildcards,
+      styleContributors: nextContributors,
+    })
+    detectConflicts()
+  },
+
+  setCategoryOrder: (order: string[]) => {
+    localStorage.setItem('sg_v2_category_order', JSON.stringify(order))
+    localStorage.setItem('sg_v2_category_order_source', 'all')
+    set({ categoryOrder: order })
+    // Sync to backend same as old panel
+    styleGridPost('/style_grid/category_order/save', { order }).catch(() => {})
+  },
+
+  categories: () => {
+    const { styles, activeSource, categoryOrder } = get()
+    const filtered = (activeSource
+      ? styles.filter(s => s.source_file === activeSource)
+      : styles
+    ).filter(s => s.source_file !== LORA_SOURCE)
+    const all = [...new Set(
+      filtered.map(s => s.category).filter(Boolean)
+    )]
+
+    // When specific source selected — always alphabetical
+    // Saved category order only applies to All Sources view
+    if (activeSource) {
+      return all.sort()
+    }
+
+    // Only use saved order if it was saved for All Sources context
+    // (contains most of the current categories)
+    const allSorted = all.sort()
+    if (categoryOrder.length === 0) return allSorted
+
+    const savedForSource = localStorage.getItem('sg_v2_category_order_source')
+    if (savedForSource !== 'all' && !activeSource) {
+      return allSorted
+    }
+
+    const relevantOrder = categoryOrder.filter(c => all.includes(c))
+    const coverage = relevantOrder.length / all.length
+
+    // If saved order covers less than 80% of current categories — ignore it
+    if (coverage < 0.8) return allSorted
+
+    const rest = all.filter(c => !relevantOrder.includes(c)).sort()
+    return [...relevantOrder, ...rest]
+  }
+}))
+
+/** Rebuild selectedKeySet + selectedCountByCategory when selectedStyles changes. */
+useStylesStore.subscribe((state, prev) => {
+  if (state.selectedStyles === prev.selectedStyles) return
+  const derived = selectionDerived(state.selectedStyles)
+  if (
+    keySetsEqual(state.selectedKeySet, derived.selectedKeySet) &&
+    countMapsEqual(state.selectedCountByCategory, derived.selectedCountByCategory)
+  ) {
+    return
+  }
+  useStylesStore.setState(derived)
+})
+
+export function useIsSelected(key: string): boolean {
+  return useStylesStore((s) => s.selectedKeySet.has(key))
+}
+
+export function useCategorySelectedCount(category: string): number {
+  return useStylesStore((s) => s.selectedCountByCategory.get(category) ?? 0)
+}
+
+export function useStyleDuplicates(name: string): readonly Style[] {
+  return useStylesStore((s) => s.duplicatesByName.get(name) ?? EMPTY_STYLES)
+}
+
+export function useThumbVersion(key: string): string {
+  return useStylesStore((s) => s.thumbVersions[key] ?? '1')
+}

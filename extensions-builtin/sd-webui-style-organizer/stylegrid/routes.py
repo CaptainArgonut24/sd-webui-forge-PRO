@@ -1,0 +1,856 @@
+"""FastAPI routes for Style Grid."""
+
+import base64
+import csv
+import hashlib
+import io
+import json
+import os
+import re
+import time
+import zipfile
+from pathlib import Path
+
+from fastapi import HTTPException, Request  # type: ignore[reportMissingImports]
+from fastapi.responses import (  # type: ignore[reportMissingImports]
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    Response,
+)
+
+from stylegrid.cache import (
+    check_files_changed,
+    get_cached_styles,
+    invalidate_styles_cache,
+    styles_cache_hashes,
+)
+from stylegrid.config import (
+    CATEGORY_ORDER_FILE,
+    EXT_DIR,
+    PRESETS_FILE,
+    get_all_styles_file_paths,
+    is_samples_source,
+)
+from stylegrid.csv_io import (
+    categorize_styles,
+    delete_style_from_csv,
+    load_all_styles,
+    normalize_source_path,
+    rename_style_in_csv,
+    save_style_to_csv,
+)
+from stylegrid.data_files import (
+    CorruptDataError,
+    backup_csv_files,
+    list_backups,
+    load_favorites,
+    load_presets,
+    load_recent,
+    migrate_favorites_once,
+    migrate_recent_once,
+    preset_styles_payload_ok,
+    restore_from_backup,
+    save_favorites,
+    save_presets,
+    save_recent,
+    thumbnails_dir_size,
+)
+from stylegrid.lora_scan import (
+    LORA_SOURCE,
+    get_lora_model_ids,
+    get_lora_preview_path,
+    lora_scan_status,
+)
+from stylegrid.lora_titles import title_fetch_manager
+from stylegrid.safe_persistence import locked_path, write_atomic
+from stylegrid.thumbnails import (
+    get_thumbnail_path,
+    list_thumbnails,
+    thumbnail_generation_manager,
+)
+from stylegrid.write_auth import inject_write_token_script, install_write_auth
+
+
+def _register_style_routes(app):
+    """Register style list/export/import/category-order routes."""
+    @app.get("/style_grid/styles")
+    async def get_styles(request: Request):
+        styles = get_cached_styles()
+        categories = categorize_styles(styles)
+        etag_input = {
+            "csv": styles_cache_hashes(),
+            "lora": lora_scan_status(),
+        }
+        etag = hashlib.md5(json.dumps(etag_input, sort_keys=True, default=str).encode()).hexdigest()
+        if_none_match = request.headers.get("If-None-Match", "").strip().strip('"')
+        if if_none_match and if_none_match == etag:
+            return Response(status_code=304)
+        try:
+            payload = {
+                "categories": categories,
+                "presets": load_presets(),
+            }
+        except CorruptDataError as exc:
+            raise HTTPException(status_code=409, detail=_corrupt_response(exc)) from exc
+        response = JSONResponse(content=payload)
+        response.headers["ETag"] = etag
+        return response
+
+    @app.get("/style_grid/check_update")
+    async def api_check_update():
+        return {"changed": check_files_changed()}
+
+    @app.get("/style_grid/export")
+    async def api_export():
+        try:
+            favorites, _fav_persisted = load_favorites()
+            recent, _recent_persisted = load_recent()
+            return {
+                "styles": load_all_styles(),
+                "presets": load_presets(),
+                "favorites": favorites,
+                "recent": recent,
+                "exported_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+        except CorruptDataError as exc:
+            raise HTTPException(status_code=409, detail=_corrupt_response(exc)) from exc
+
+    @app.post("/style_grid/import")
+    async def api_import(request: Request):
+        # Old exports may include a legacy "usage" key; it is ignored intentionally.
+        raw = await request.body()
+        if not raw:
+            return {"ok": True}
+        if len(raw) >= 2 and raw[:2] == b"PK":
+            try:
+                with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+                    if "presets.json" in zf.namelist():
+                        data = json.loads(zf.read("presets.json").decode("utf-8"))
+                        if isinstance(data, dict):
+                            save_presets(data)
+            except CorruptDataError as exc:
+                return _corrupt_response(exc)
+            except Exception:
+                return {"error": "import_failed"}
+            return {"ok": True}
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid JSON") from None
+        if not isinstance(data, dict):
+            return {"ok": True}
+        if "presets" in data:
+            try:
+                with locked_path(PRESETS_FILE):
+                    p = load_presets()
+                    p.update(data["presets"])
+                    save_presets(p)
+            except CorruptDataError as exc:
+                return _corrupt_response(exc)
+        if "favorites" in data:
+            try:
+                save_favorites(data.get("favorites") or [])
+            except CorruptDataError as exc:
+                return _corrupt_response(exc)
+        if "recent" in data:
+            try:
+                save_recent(data.get("recent") or [])
+            except CorruptDataError as exc:
+                return _corrupt_response(exc)
+        if "styles" in data and data["styles"]:
+            existing_names = {
+                s["name"]
+                for s in get_cached_styles()
+                if s.get("source_file") != LORA_SOURCE and s.get("name")
+            }
+            valid_styles = []
+            invalid_count = 0
+            for s in data["styles"]:
+                if not isinstance(s, dict):
+                    invalid_count += 1
+                    continue
+                name = s.get("name", "")
+                if not isinstance(name, str) or not name.strip():
+                    invalid_count += 1
+                    continue
+                valid_styles.append(s)
+
+            collisions = sorted({
+                s["name"].strip() for s in valid_styles
+                if s["name"].strip() in existing_names
+            })
+            importable = [s for s in valid_styles if s["name"].strip() not in existing_names]
+
+            if importable:
+                ext_styles = os.path.join(EXT_DIR, "styles")
+                os.makedirs(ext_styles, exist_ok=True)
+                target = os.path.join(ext_styles, f"imported_{time.strftime('%Y%m%d_%H%M%S')}.csv")
+                buf = io.StringIO(newline="")
+                w = csv.writer(buf)
+                w.writerow(["name", "prompt", "negative_prompt", "description", "category"])
+                for s in importable:
+                    w.writerow([
+                        s.get("name", ""),
+                        s.get("prompt", ""),
+                        s.get("negative_prompt", ""),
+                        s.get("description", ""),
+                        s.get("category", "") or s.get("category_explicit", ""),
+                    ])
+                write_atomic(target, buf.getvalue().encode("utf-8-sig"))
+                invalidate_styles_cache()
+
+            return {
+                "ok": True,
+                "imported": len(importable),
+                "collisions": collisions,
+                "invalid": invalid_count,
+            }
+        return {"ok": True}
+
+    @app.post("/style_grid/category_order/save")
+    async def api_save_category_order(data: dict):
+        order = data.get("order", [])
+        if not isinstance(order, list):
+            return {"error": "order must be a list"}
+        write_atomic(
+            CATEGORY_ORDER_FILE,
+            json.dumps(order, indent=2, ensure_ascii=False) + "\n",
+        )
+        return {"ok": True}
+
+
+def _corrupt_response(exc: CorruptDataError):
+    return {
+        "error": "corrupt_data",
+        "path": exc.path,
+        "bak_path": exc.path + ".bak",
+        "message": str(exc),
+    }
+
+
+def _register_preset_routes(app):
+    """Register preset CRUD routes."""
+    @app.get("/style_grid/presets")
+    async def get_presets():
+        try:
+            return load_presets()
+        except CorruptDataError as exc:
+            raise HTTPException(status_code=409, detail=_corrupt_response(exc)) from exc
+
+    @app.post("/style_grid/presets/save")
+    async def api_save_preset(data: dict):
+        name = data.get("name", "").strip()
+        styles = data.get("styles", [])
+        wildcards = data.get("wildcards", [])
+        note = data.get("note", "")
+        overwrite = bool(data.get("overwrite"))
+        if not name:
+            return {"error": "Name required"}
+        if not preset_styles_payload_ok(styles):
+            return {"error": "styles must be a list of names or {name, source_file?, weight?}"}
+        if wildcards is None:
+            wildcards = []
+        if not isinstance(wildcards, list):
+            return {"error": "wildcards must be a list"}
+        if not isinstance(note, str):
+            note = ""
+        try:
+            with locked_path(PRESETS_FILE):
+                presets = load_presets()
+                if name in presets and not overwrite:
+                    return {"error": "exists", "name": name}
+                prev = presets.get(name) if isinstance(presets.get(name), dict) else None
+                created = (
+                    prev["created"]
+                    if prev and isinstance(prev.get("created"), str) and prev.get("created")
+                    else time.strftime("%Y-%m-%dT%H:%M:%S")
+                )
+                entry = {
+                    "styles": styles,
+                    "wildcards": wildcards,
+                    "note": note,
+                    "created": created,
+                }
+                if prev and isinstance(prev.get("last_used"), str) and prev.get("last_used"):
+                    entry["last_used"] = prev["last_used"]
+                presets[name] = entry
+                saved = save_presets(presets)
+        except CorruptDataError as exc:
+            return _corrupt_response(exc)
+        return {"ok": True, "presets": saved}
+
+    @app.post("/style_grid/presets/delete")
+    async def api_delete_preset(data: dict):
+        name = data.get("name", "")
+        try:
+            with locked_path(PRESETS_FILE):
+                presets = load_presets()
+                if name in presets:
+                    del presets[name]
+                    saved = save_presets(presets)
+                    return {"ok": True, "presets": saved}
+                return {"ok": True, "presets": presets}
+        except CorruptDataError as exc:
+            return _corrupt_response(exc)
+
+    @app.post("/style_grid/presets/rename")
+    async def api_rename_preset(data: dict):
+        old_name = (data.get("old_name") or "").strip()
+        new_name = (data.get("new_name") or "").strip()
+        overwrite = bool(data.get("overwrite"))
+        if not old_name or not new_name:
+            return {"error": "Name required"}
+        try:
+            with locked_path(PRESETS_FILE):
+                presets = load_presets()
+                if old_name not in presets:
+                    return {"error": "not_found", "name": old_name}
+                if new_name != old_name and new_name in presets and not overwrite:
+                    return {"error": "exists", "name": new_name}
+                entry = presets.pop(old_name)
+                presets[new_name] = entry
+                saved = save_presets(presets)
+        except CorruptDataError as exc:
+            return _corrupt_response(exc)
+        return {"ok": True, "presets": saved}
+
+    @app.post("/style_grid/presets/touch")
+    async def api_touch_preset(data: dict):
+        name = (data.get("name") or "").strip()
+        if not name:
+            return {"error": "Name required"}
+        try:
+            with locked_path(PRESETS_FILE):
+                presets = load_presets()
+                if name not in presets:
+                    return {"error": "not_found", "name": name}
+                presets[name]["last_used"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                saved = save_presets(presets)
+        except CorruptDataError as exc:
+            return _corrupt_response(exc)
+        return {"ok": True, "presets": saved}
+
+def _items_payload(items, persisted):
+    return {"items": items, "persisted": persisted}
+
+
+def _register_favorites_recent_routes(app):
+    """Register server-side favorites / recent list routes."""
+
+    @app.get("/style_grid/favorites")
+    async def get_favorites():
+        try:
+            items, persisted = load_favorites()
+        except CorruptDataError as exc:
+            raise HTTPException(status_code=409, detail=_corrupt_response(exc)) from exc
+        return _items_payload(items, persisted)
+
+    @app.post("/style_grid/favorites/save")
+    async def api_save_favorites(data: dict):
+        try:
+            items = save_favorites(data.get("items", []))
+        except CorruptDataError as exc:
+            return _corrupt_response(exc)
+        return {"ok": True, "items": items}
+
+    @app.post("/style_grid/favorites/migrate")
+    async def api_migrate_favorites(data: dict):
+        """Write localStorage favorites only when favorites.json is absent."""
+        try:
+            items, migrated = migrate_favorites_once(data.get("items", []))
+        except CorruptDataError as exc:
+            return _corrupt_response(exc)
+        return {"ok": True, "migrated": migrated, "items": items}
+
+    @app.get("/style_grid/recent")
+    async def get_recent():
+        try:
+            items, persisted = load_recent()
+        except CorruptDataError as exc:
+            raise HTTPException(status_code=409, detail=_corrupt_response(exc)) from exc
+        return _items_payload(items, persisted)
+
+    @app.post("/style_grid/recent/save")
+    async def api_save_recent(data: dict):
+        try:
+            items = save_recent(data.get("items", []))
+        except CorruptDataError as exc:
+            return _corrupt_response(exc)
+        return {"ok": True, "items": items}
+
+    @app.post("/style_grid/recent/migrate")
+    async def api_migrate_recent(data: dict):
+        """Write localStorage recent only when recent.json is absent."""
+        try:
+            items, migrated = migrate_recent_once(data.get("items", []))
+        except CorruptDataError as exc:
+            return _corrupt_response(exc)
+        return {"ok": True, "migrated": migrated, "items": items}
+
+
+def _remove_thumbnail_file(name, source):
+    """Remove thumbnail for name+source if present. Shared by style delete and DELETE /thumbnail."""
+    if not name or not source:
+        return
+    path = get_thumbnail_path(name, source)
+    if os.path.isfile(path):
+        os.remove(path)
+
+
+def _move_thumbnail_file(old_name, new_name, source):
+    """Best-effort move of thumbnail from old name+source key to new name+source.
+
+    Uses get_thumbnail_path for both keys (no duplicated hashing). No-op when
+    names match, source is missing, or the old file is absent. Failures are
+    swallowed by the caller — rename CSV success must not roll back.
+    """
+    if not old_name or not new_name or not source:
+        return
+    if old_name == new_name:
+        return
+    old_path = get_thumbnail_path(old_name, source)
+    new_path = get_thumbnail_path(new_name, source)
+    if old_path == new_path or not os.path.isfile(old_path):
+        return
+    os.replace(old_path, new_path)
+
+
+def _remap_presets_after_rename(old_name, new_name, resolved_path=None, source=None):
+    """Rewrite preset members that pointed at old_name+source to new_name.
+
+    Presets store absolute source_file paths (see normalize_preset_entry /
+    style source_file). Match with normalize_source_path against resolved_path
+    when available so a basename request does not update a same-named style in
+    a different CSV. Saves only when at least one member changed.
+    """
+    if not old_name or not new_name or old_name == new_name:
+        return
+    target_norm = None
+    if resolved_path:
+        target_norm = normalize_source_path(resolved_path)
+    elif source:
+        src = str(source).strip()
+        replaced = src.replace("\\", "/")
+        if os.path.isabs(src) or "/" in replaced:
+            target_norm = normalize_source_path(src)
+    if not target_norm:
+        return
+
+    with locked_path(PRESETS_FILE):
+        presets = load_presets()
+        changed = False
+        for preset in presets.values():
+            if not isinstance(preset, dict):
+                continue
+            styles = preset.get("styles")
+            if not isinstance(styles, list):
+                continue
+            for entry in styles:
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("name") != old_name:
+                    continue
+                mem_sf = entry.get("source_file") or ""
+                if not isinstance(mem_sf, str) or not mem_sf.strip():
+                    continue
+                if normalize_source_path(mem_sf) != target_norm:
+                    continue
+                entry["name"] = new_name
+                changed = True
+        if changed:
+            save_presets(presets)
+
+
+def _register_crud_routes(app):
+    """Register style save/delete/rename and backup routes."""
+    @app.post("/style_grid/style/save")
+    async def api_save_style(data: dict):
+        name = data.get("name", "").strip()
+        if not name:
+            return {"error": "Name required"}
+
+        # FIX A: reject writes into read-only samples/
+        source = data.get("source")
+        resolved_path = None
+        if source:
+            source_base = os.path.basename(source)
+            if not source_base.lower().endswith(".csv"):
+                source_base = source_base + ".csv"
+            for fp in get_all_styles_file_paths():
+                if os.path.basename(fp) == source_base:
+                    resolved_path = fp
+                    break
+        if resolved_path and is_samples_source(resolved_path):
+            return JSONResponse(
+                {"ok": False, "error": "Cannot modify styles from the read-only samples/ pack."},
+                status_code=403,
+            )
+
+        # FIX B: surface LoRA/validation ValueError as 400
+        try:
+            save_style_to_csv(
+                name,
+                data.get("prompt", ""),
+                data.get("negative_prompt", ""),
+                data.get("description", ""),
+                data.get("source"),
+                category=data.get("category"),
+            )
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        return {"ok": True}
+
+    @app.post("/style_grid/style/delete")
+    async def api_del_style(data: dict):
+        name = data.get("name", "").strip()
+        if not name:
+            return {"error": "Name required"}
+
+        # FIX A: reject deletes from read-only samples/
+        source = data.get("source")
+        if not source:
+            for s in load_all_styles():
+                if s["name"] == name:
+                    source = s.get("source", "styles.csv")
+                    break
+        resolved_path = None
+        if source:
+            source_base = os.path.basename(source)
+            if not source_base.lower().endswith(".csv"):
+                source_base = source_base + ".csv"
+            for fp in get_all_styles_file_paths():
+                if os.path.basename(fp) == source_base:
+                    resolved_path = fp
+                    break
+        if resolved_path and is_samples_source(resolved_path):
+            return JSONResponse(
+                {"ok": False, "error": "Cannot modify styles from the read-only samples/ pack."},
+                status_code=403,
+            )
+
+        # FIX B: surface LoRA/validation ValueError as 400
+        try:
+            deleted = delete_style_from_csv(name, data.get("source"))
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        if not deleted:
+            return JSONResponse(
+                {"ok": False, "error": "Style not found"},
+                status_code=404,
+            )
+        _remove_thumbnail_file(name, source or "")
+        return {"ok": True}
+
+    @app.post("/style_grid/style/rename")
+    async def api_rename_style(data: dict):
+        old_name = data.get("old_name", "").strip()
+        new_name = data.get("new_name", "").strip()
+        if not old_name:
+            return {"error": "old_name required"}
+        if not new_name:
+            return {"error": "new_name required"}
+
+        # FIX A: reject writes into read-only samples/
+        source = data.get("source")
+        if not source:
+            for s in load_all_styles():
+                if s["name"] == old_name:
+                    source = s.get("source", "styles.csv")
+                    break
+        resolved_path = None
+        if source:
+            source_base = os.path.basename(source)
+            if not source_base.lower().endswith(".csv"):
+                source_base = source_base + ".csv"
+            for fp in get_all_styles_file_paths():
+                if os.path.basename(fp) == source_base:
+                    resolved_path = fp
+                    break
+        if resolved_path and is_samples_source(resolved_path):
+            return JSONResponse(
+                {"ok": False, "error": "Cannot modify styles from the read-only samples/ pack."},
+                status_code=403,
+            )
+
+        fields = {}
+        for key in ("prompt", "negative_prompt", "description", "category"):
+            if key in data:
+                fields[key] = data[key]
+
+        # FIX B: surface LoRA/validation ValueError as 400
+        try:
+            rename_style_in_csv(old_name, new_name, data.get("source"), **fields)
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+        # Best-effort: CSV rename already committed; thumbnail miss must not fail the request.
+        thumb_source = resolved_path or source or ""
+        try:
+            _move_thumbnail_file(old_name, new_name, thumb_source)
+        except Exception:
+            pass
+        # Best-effort: same contract — preset rewrite must not fail or roll back CSV.
+        try:
+            _remap_presets_after_rename(
+                old_name, new_name, resolved_path=resolved_path, source=source
+            )
+        except Exception:
+            pass
+        return {"ok": True}
+
+    @app.get("/style_grid/backups")
+    async def api_list_backups():
+        return {
+            "backups": list_backups(),
+            "thumbnails_bytes": thumbnails_dir_size(),
+        }
+
+    @app.post("/style_grid/backup")
+    async def api_backup(request: Request):
+        include_thumbnails = False
+        try:
+            raw = await request.body()
+            if raw:
+                data = json.loads(raw.decode("utf-8"))
+                if isinstance(data, dict):
+                    include_thumbnails = bool(data.get("include_thumbnails"))
+        except Exception:
+            include_thumbnails = False
+        try:
+            result = backup_csv_files(include_thumbnails=include_thumbnails)
+            return result
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.post("/style_grid/restore")
+    async def api_restore(data: dict):
+        name = (data.get("snapshot") or data.get("name") or "").strip()
+        if not name:
+            return JSONResponse(
+                {"ok": False, "error": "snapshot name required"},
+                status_code=400,
+            )
+        try:
+            result = restore_from_backup(name, create_safety=True)
+        except FileNotFoundError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=404)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        invalidate_styles_cache()
+        return result
+
+
+def _register_thumbnail_routes(app):
+    """Register thumbnail list/get/upload/generate/delete/cleanup routes."""
+    mgr = thumbnail_generation_manager
+
+    @app.get("/style_grid/thumbnails/list")
+    async def api_list_thumbnails():
+        return {"has_thumbnail": list_thumbnails()}
+
+    @app.get("/style_grid/thumbnail")
+    async def api_get_thumbnail(name: str = "", source: str = ""):
+        # LoRA cards: serve the literal preview file found next to the model
+        # (if any) — never the generated-thumbnail pipeline below.
+        if source == LORA_SOURCE or name.startswith("LORA_"):
+            lora_preview = get_lora_preview_path(name)
+            if lora_preview and os.path.isfile(lora_preview):
+                ext = os.path.splitext(lora_preview)[1].lower().lstrip(".")
+                media_type = "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}"
+                return FileResponse(
+                    lora_preview,
+                    media_type=media_type,
+                    headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
+                )
+            return Response(status_code=404)
+
+        if not source:
+            return JSONResponse(
+                {"ok": False, "error": "source is required for CSV thumbnails"},
+                status_code=400,
+            )
+
+        path = get_thumbnail_path(name, source)
+        if os.path.isfile(path):
+            return FileResponse(
+                path,
+                media_type="image/webp",
+                headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
+            )
+
+        return Response(status_code=404)
+
+    @app.post("/style_grid/thumbnail/upload")
+    async def api_upload_thumbnail(data: dict):
+        style_name = data.get("name", "").strip()
+        image_data = data.get("image", "")
+        source = (data.get("source") or "").strip()
+        if source == LORA_SOURCE or style_name.startswith("LORA_"):
+            return {"error": "LoRA thumbnails come from the model's own preview file and can't be replaced here."}
+        if not style_name or not image_data:
+            return {"error": "name and image required"}
+        if not source:
+            return JSONResponse(
+                {"ok": False, "error": "source is required for CSV thumbnails"},
+                status_code=400,
+            )
+        try:
+            if "," in image_data:
+                image_data = image_data.split(",", 1)[1]
+            raw = base64.b64decode(image_data)
+            if len(raw) > 2 * 1024 * 1024:
+                return {"error": "Image too large (max 2MB)"}
+            ALLOWED_MAGIC = [
+                b'\xff\xd8\xff',
+                b'\x89PNG\r\n\x1a\n',
+                b'RIFF',
+                b'GIF87a',
+                b'GIF89a',
+            ]
+            is_valid_image = any(raw.startswith(m) for m in ALLOWED_MAGIC)
+            if raw.startswith(b'RIFF') and raw[8:12] != b'WEBP':
+                is_valid_image = False
+            if not is_valid_image:
+                return {"error": "Invalid image format. Allowed: JPEG, PNG, WEBP, GIF"}
+            path = get_thumbnail_path(style_name, source)
+            try:
+                from PIL import Image  # type: ignore[reportMissingImports]
+                img = Image.open(io.BytesIO(raw))
+                if getattr(img, "is_animated", False):
+                    img.seek(0)
+                has_alpha = (
+                    img.mode in ("RGBA", "LA")
+                    or (img.mode == "P" and "transparency" in img.info)
+                )
+                img = img.convert("RGBA" if has_alpha else "RGB")
+                buf = io.BytesIO()
+                img.save(buf, "WEBP", quality=85)
+                webp_bytes = buf.getvalue()
+            except Exception as e:
+                return JSONResponse(
+                    {"ok": False, "error": f"Failed to convert image to WebP: {e}"},
+                    status_code=400,
+                )
+            tmp_path = path + ".tmp"
+            with open(tmp_path, "wb") as f:
+                f.write(webp_bytes)
+            os.replace(tmp_path, path)
+            return {"ok": True}
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.get("/style_grid/thumbnail/gen_status")
+    async def api_gen_status(job_id: str = ""):
+        if not job_id:
+            return JSONResponse(
+                {"ok": False, "error": "job_id is required"},
+                status_code=400,
+            )
+        return mgr.get_status(job_id)
+
+    @app.post("/style_grid/thumbnail/generate")
+    async def api_generate_thumbnail(data: dict):
+        style_name = data.get("name", "").strip()
+        requested_source = data.get("source", "").strip()
+        if requested_source == LORA_SOURCE or style_name.startswith("LORA_"):
+            return {"error": "LoRA cards only show their own preview file; SD-generated previews are disabled for them."}
+        if not style_name:
+            return {"error": "name required"}
+        if not requested_source:
+            return JSONResponse(
+                {"ok": False, "error": "source is required for CSV thumbnails"},
+                status_code=400,
+            )
+
+        try:
+            job_id = mgr.enqueue(style_name, requested_source)
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        return {"ok": True, "job_id": job_id, "status": "queued"}
+
+    @app.post("/style_grid/thumbnail/cancel")
+    async def api_cancel_thumbnail(data: dict):
+        job_id = (data.get("job_id") or "").strip()
+        if not job_id:
+            return JSONResponse(
+                {"ok": False, "error": "job_id is required"},
+                status_code=400,
+            )
+        return {"ok": mgr.cancel(job_id)}
+
+    @app.delete("/style_grid/thumbnail")
+    async def api_delete_thumbnail(name: str = "", source: str = ""):
+        if not source:
+            return JSONResponse(
+                {"ok": False, "error": "source is required for CSV thumbnails"},
+                status_code=400,
+            )
+        _remove_thumbnail_file(name, source)
+        return {"ok": True}
+
+
+def _register_lora_routes(app):
+    """Register LoRA title-fetch routes."""
+    @app.post("/style_grid/lora/fetch_titles")
+    async def api_lora_fetch_titles(data: dict = None):
+        force = bool((data or {}).get("force"))
+        model_ids = list(get_lora_model_ids().values())
+        if not model_ids:
+            return {"error": "No LoRAs with a modelId found (metadata missing or LoRA folder not scanned yet)"}
+        if not title_fetch_manager.try_begin():
+            return {"error": "already running"}
+        title_fetch_manager.spawn(model_ids, force=force)
+        return {"ok": True, "total_candidates": len(set(model_ids))}
+
+    @app.get("/style_grid/lora/fetch_titles/status")
+    async def api_lora_fetch_titles_status():
+        return title_fetch_manager.get_status()
+
+
+def _get_ui_html() -> str:
+    """
+    Load built UI index.html and rewrite every relative asset URL (src/href="./...")
+    to the Gradio file URL with a fresh ?v= cache buster on each call.
+    """
+    html_path = Path(__file__).parent.parent / "ui" / "dist" / "index.html"
+    html = html_path.read_text(encoding="utf-8")
+    v = str(int(time.time()))
+    base = "/file=extensions/sd-webui-style-organizer/ui/dist"
+    pattern = re.compile(
+        r'(?P<attr>\b(?:src|href))=(?P<q>["\'])(?P<path>\./[^"\']+)(?P=q)',
+        re.IGNORECASE,
+    )
+    def _sub(m: re.Match) -> str:
+        rel = m.group("path")[2:]
+        q = m.group("q")
+        return f'{m.group("attr")}={q}{base}/{rel}?v={v}{q}'
+
+    return inject_write_token_script(pattern.sub(_sub, html))
+
+
+def _register_ui_routes(app):
+    """Serve V2 React iframe HTML with cache-busted asset URLs."""
+
+    @app.get("/style_grid/ui")
+    async def serve_ui():
+        return HTMLResponse(content=_get_ui_html())
+
+
+def register_api(demo, app):
+    """
+    Register all Style Grid API groups on FastAPI app.
+
+    Most handlers return HTTP 200 with `{ "error": ... }` payloads on logical failures;
+    notable exceptions include `/styles` ETag 304 and `/thumbnail` 404.
+    """
+    install_write_auth(app)
+    _register_style_routes(app)
+    _register_preset_routes(app)
+    _register_favorites_recent_routes(app)
+    _register_crud_routes(app)
+    _register_thumbnail_routes(app)
+    _register_lora_routes(app)
+    _register_ui_routes(app)
