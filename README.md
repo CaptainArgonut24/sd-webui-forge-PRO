@@ -22,15 +22,6 @@ The name "Forge" is inspired by "Minecraft Forge". This project aims to become t
 
 <br>
 
-## Windows and Android Companion Apps
-
-This repository includes separate Windows Forge Server, Windows Front End, and
-Android Front End packages. The server launcher starts an existing Forge
-installation; clients connect to that shared server. See
-[Forge Companion](apps/ForgeCompanion/README.md) for build and setup instructions.
-
-<br>
-
 ## Features [Oct.]
 > Most base features of the original [Automatic1111 Webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) should still function
 
@@ -399,7 +390,6 @@ installation; clients connect to that shared server. See
 
 3. **(Optional)** Configure [Commandline](#commandline)
 4. Launch the WebUI via `webui-user.bat`
-    - This checkout's launcher uses `D:\StabilityMatrix\Models` as the shared model folder and preserves other launch arguments; change `COMMANDLINE_ARGS` in `webui-user.bat` if your Stability Matrix library is elsewhere.
 5. During the first launch, it will automatically install all the requirements
 6. Once the installation is finished, the WebUI will start in a browser automatically
 

@@ -1,4 +1,3 @@
-import json
 import os
 
 import gradio as gr
@@ -24,8 +23,8 @@ def javascript_html():
     for script in scripts.list_scripts("javascript", ".mjs"):
         head += f'<script type="module" src="{webpath(script.path)}"></script>\n'
 
-    default_theme = shared.cmd_opts.theme or "dark"
-    head += f"<script type=\"text/javascript\">set_theme({json.dumps(default_theme)});</script>\n"
+    if shared.cmd_opts.theme:
+        head += f'<script type="text/javascript">set_theme("{shared.cmd_opts.theme}");</script>\n'
 
     return head
 

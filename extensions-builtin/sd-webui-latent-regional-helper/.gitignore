@@ -1,5 +1,0 @@
-# Ignore .pyc files
-*.pyc
-
-# Ignore log files
-*.log
