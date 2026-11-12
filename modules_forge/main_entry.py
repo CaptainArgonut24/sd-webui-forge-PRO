@@ -53,11 +53,7 @@ def make_checkpoint_manager_ui():
         if len(sd_models.checkpoints_list) > 0:
             shared.opts.set("sd_model_checkpoint", next(iter(sd_models.checkpoints_list.values())).name)
 
-    def preset_choices():
-        presets = [p for p in PresetArch.choices() if p not in shared.cmd_opts.disable_preset]
-        return sorted(presets) if shared.cmd_opts.sort_preset else presets
-
-    ui_forge_preset = gr.Dropdown(label="UI Preset", value=shared.opts.forge_preset, choices=preset_choices(), elem_id="forge_ui_preset")
+    ui_forge_preset = gr.Dropdown(label="UI Preset", value=shared.opts.forge_preset, choices=PresetArch.choices(), elem_id="forge_ui_preset")
 
     ui_checkpoint = gr.Dropdown(label="Checkpoint", value=None, choices=None, elem_id="setting_sd_model_checkpoint", elem_classes=["model_selection"])
 
@@ -125,7 +121,7 @@ def refresh_models() -> tuple[list[os.PathLike], list[os.PathLike]]:
         return ckpt_list, list(module_map.values())
 
 
-def refresh_model_loading_parameters(*, refresh: bool = True, disable_log: bool = False):
+def refresh_model_loading_parameters(*, refresh: bool = True):
     if not refresh:
         return
 
@@ -144,21 +140,17 @@ def refresh_model_loading_parameters(*, refresh: bool = True, disable_log: bool 
     modules: list[str] = [os.path.basename(x) for x in shared.opts.forge_additional_modules]
     dtype = str(unet_storage_dtype or [torch.float16, torch.bfloat16])
 
-    if not disable_log:
-        logger.info("Model Selected:")
-        print_json(data=dict(checkpoint=os.path.basename(ckpt), modules=modules, dtype=dtype))
+    logger.info("Model Selected:")
+    print_json(data=dict(checkpoint=os.path.basename(ckpt), modules=modules, dtype=dtype))
 
     if ckpt.endswith(("gguf", "GGUF")) and not lora_fp16:
+        logger.warning("GGUF requires fp16 LoRA ; overriding option")
         lora_fp16 = True
-        if not disable_log:
-            logger.warning("GGUF requires fp16 LoRA ; overriding option")
 
     dynamic_args.online_lora = lora_fp16
-
-    if not disable_log:
-        logger.info(f"Patch LoRAs on-the-fly: {lora_fp16}")
-        if not ckpt.endswith(("gguf", "GGUF")) and lora_fp16:
-            logger.warning("on-the-fly WILL be slower ; enable only if you know what you are doing")
+    logger.info(f"Patch LoRAs on-the-fly: {lora_fp16}")
+    if not ckpt.endswith(("gguf", "GGUF")) and lora_fp16:
+        logger.warning("on-the-fly WILL be slower ; enable only if you know what you are doing")
 
     processing.need_global_unload = True
 

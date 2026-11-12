@@ -42,7 +42,7 @@ mimetypes.add_type("application/javascript", ".mjs")
 mimetypes.add_type("image/webp", ".webp")
 mimetypes.add_type("image/avif", ".avif")
 
-if not cmd_opts.share and not cmd_opts.listen:
+if not cmd_opts.webui_is_non_local:
     # fix gradio phoning home
     gradio.utils.version_check = lambda: None
     gradio.utils.get_local_ip_address = lambda: "127.0.0.1"

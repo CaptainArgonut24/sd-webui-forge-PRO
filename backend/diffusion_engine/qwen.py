@@ -1,3 +1,4 @@
+import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -9,7 +10,6 @@ from huggingface_guess import model_list
 from backend import memory_management
 from backend.args import dynamic_args
 from backend.diffusion_engine.base import ForgeDiffusionEngine, ForgeObjects
-from backend.misc.image_resize import resize_reference
 from backend.patcher.clip import CLIP
 from backend.patcher.unet import UnetPatcher
 from backend.patcher.vae import VAE
@@ -77,12 +77,29 @@ class QwenImage(ForgeDiffusionEngine):
         return token_count, max(999, token_count)
 
     @torch.inference_mode()
-    def encode_vision(self, image: torch.Tensor, i: int) -> tuple[torch.Tensor, torch.Tensor, str]:
-        samples = image.movedim(-1, 1)
+    def encode_vision(self, image: torch.Tensor, i: int) -> tuple[torch.Tensor, str, torch.Tensor]:
+        samples = image.movedim(-1, 1)  # b, c, h, w
 
-        _vision = resize_reference(samples, 1, 384).movedim(1, -1)[:, :, :, :3]
+        total = int(384 * 384)
+        scale_by = math.sqrt(total / (samples.shape[3] * samples.shape[2]))
+        width = round(samples.shape[3] * scale_by)
+        height = round(samples.shape[2] * scale_by)
 
-        s = resize_reference(samples, resolution=1024)
+        s = torch.nn.functional.interpolate(samples, size=(height, width), mode="area")
+        _vision = s.movedim(1, -1)[:, :, :, :3]
+
+        width = samples.shape[3]
+        height = samples.shape[2]
+
+        if opts.qwen_vae_resize:
+            total = int(1024 * 1024)
+            scale_by = math.sqrt(total / (width * height))
+            width *= scale_by
+            height *= scale_by
+
+        width = round(width / 16.0) * 16
+        height = round(height / 16.0) * 16
+        s = torch.nn.functional.interpolate(samples, size=(height, width), mode="area")
         sample = self.forge_objects.vae.encode(s.movedim(1, -1)[:, :, :, :3])
         _latent = self.forge_objects.vae.first_stage_model.process_in(sample)
 
@@ -93,7 +110,10 @@ class QwenImage(ForgeDiffusionEngine):
     @torch.inference_mode()
     def encode_first_stage(self, x: torch.Tensor):
         if dynamic_args.edit:
-            self.store_reference(x[:1].movedim(1, -1).mul(0.5).add(0.5).cpu())
+            start_image = x[0].movedim(0, -1).mul(0.5).add(0.5).unsqueeze(0)
+            if dynamic_args.is_referencing:
+                self.ref_latents.append(start_image.cpu())
+            else:
+                self.ini_latent = start_image.cpu()
 
-        if not dynamic_args.is_referencing:
-            return super().encode_first_stage(x)
+        return super().encode_first_stage(x)

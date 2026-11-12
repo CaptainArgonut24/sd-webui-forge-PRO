@@ -17,6 +17,18 @@ def initialize():
     except FileNotFoundError:
         pass
 
+    shared.listen_on_network = shared.opts.listen_on_network
+    shared.cmd_opts.webui_is_non_local = any([
+        shared.cmd_opts.share,
+        shared.cmd_opts.listen,
+        shared.cmd_opts.ngrok,
+        shared.cmd_opts.server_name,
+        shared.listen_on_network,
+    ])
+    shared.cmd_opts.disable_extension_access = (
+        shared.cmd_opts.webui_is_non_local and not shared.cmd_opts.enable_insecure_extension_access
+    )
+
     from modules import devices
     shared.device = devices.device
 

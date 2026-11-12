@@ -123,6 +123,7 @@ def webui_worker():
             },
             root_path=f"/{cmd_opts.subpath}" if cmd_opts.subpath else "",
         )
+        shared.local_url = local_url
 
         startup_timer.record("gradio launch")
 

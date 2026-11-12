@@ -18,7 +18,7 @@ def javascript_html():
     head += f'<script type="text/javascript" src="{webpath(script_js)}"></script>\n'
 
     for script in scripts.list_scripts("javascript", ".js"):
-        head += f'<script type="text/javascript" src="{webpath(script.path)}"></script>\n'
+        head += f'<script type="text/javascript" src="{webpath(script.path)}" defer></script>\n'
 
     for script in scripts.list_scripts("javascript", ".mjs"):
         head += f'<script type="module" src="{webpath(script.path)}"></script>\n'
@@ -30,7 +30,7 @@ def javascript_html():
 
 
 def css_html():
-    head = ""
+    head = '<link rel="stylesheet" property="stylesheet" href="webui-assets/css/sourcesanspro.css">'
 
     def stylesheet(fn):
         return f'<link rel="stylesheet" property="stylesheet" href="{webpath(fn)}">'
@@ -57,7 +57,8 @@ def reload_javascript():
 
     def template_response(*args, **kwargs):
         res = shared.GradioTemplateResponseOriginal(*args, **kwargs)
-        res.body = res.body.replace(b"</head>", f'{js}<meta name="referrer" content="no-referrer"/></head>'.encode("utf8"))
+        font_preload = '<link rel="preload" as="style" href="webui-assets/css/sourcesanspro.css">'
+        res.body = res.body.replace(b"</head>", f'{font_preload}{js}<meta name="referrer" content="no-referrer"/></head>'.encode("utf8"))
         res.body = res.body.replace(b"</body>", f"{css}</body>".encode("utf8"))
         res.init_headers()
         return res

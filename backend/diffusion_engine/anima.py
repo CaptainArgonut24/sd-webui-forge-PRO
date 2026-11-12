@@ -66,4 +66,13 @@ class Anima(ForgeDiffusionEngine):
 
     @torch.inference_mode()
     def encode_first_stage(self, x: torch.Tensor):
-        return super().encode_first_stage(x, multiple=16 if opts.anima_do_reference else 0)
+        samples: torch.Tensor = super().encode_first_stage(x)
+
+        if opts.anima_do_reference:
+            sample = samples[0].detach().clone().unsqueeze(0).cpu()
+            if dynamic_args.is_referencing:
+                self.ref_latents.append(sample)
+            else:
+                self.ini_latent = sample
+
+        return samples

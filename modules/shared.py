@@ -23,6 +23,10 @@ hide_dirs = {"visible": not cmd_opts.hide_ui_dir_config}
 
 demo: gr.Blocks = None
 
+local_url: str = None
+
+listen_on_network: bool = False
+
 device: str = None
 
 xformers_available = memory_management.xformers_enabled()

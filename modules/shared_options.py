@@ -162,11 +162,21 @@ options_templates.update(
 
 options_templates.update(
     options_section(
+        ("network", "Network", "system"),
+        {
+            "listen_on_network": OptionInfo(False, "Listen on local network", restrict_api=True).info("Allow other devices on your local network to access the Web UI; only enable on trusted networks").needs_restart(),
+            "network_access_urls": OptionHTML("Network URLs will appear when the Web UI is ready."),
+        },
+    )
+)
+
+options_templates.update(
+    options_section(
         ("system", "System", "system"),
         {
             "setting_allocated_vram": OptionInfo(1.0, "GPU Weights", gr.Slider, {"minimum": 0.0, "maximum": 1.0, "step": 0.05}).info("amount of VRAM that Forge can access").info("in % of total vram"),
             "res_step": OptionInfo(64, "Resolution Step", gr.Radio, {"choices": (8, 16, 32, 64, 128, 256)}).info('"64" is recommended to prevent compatibility issues').needs_restart(),
-            "auto_launch_browser": OptionInfo("Local", "Launch the webui in browser on startup", gr.Radio, {"choices": ("Disable", "Local", "Remote")}).info("Remote = always automatically start; Local = only when not sharing the server, such as <b>--share</b>"),
+            "auto_launch_browser": OptionInfo("Local", "Launch the webui in browser on startup", gr.Radio, {"choices": ("Disable", "Local", "Remote")}).info("Remote = always automatically start; Local = only when not sharing the server, such as <b>--share</b> or local network access"),
             "enable_console_prompts": OptionInfo(False, "Print the generation prompts to console"),
             "samples_log_stdout": OptionInfo(False, "Print the generation infotxt to console"),
             "show_warnings": OptionInfo(False, "Show warnings in console").needs_reload_ui(),
@@ -259,7 +269,7 @@ options_templates.update(
                 {"lines": 3, "max_lines": 6, "placeholder": "<Prompt Start>"},
             ),
             "divmisc": OptionDiv(),
-            "reference_max_side": OptionInfo(1024, "Maximum Side Length for Reference Images", gr.Slider, {"minimum": 0, "maximum": 2048, "step": 256}).info("applies to reference images from img2img and ImageStitch").info("set to 0 for no limit"),
+            "qwen_vae_resize": OptionInfo(False, "[Qwen-Image-Edit] Resize input image to 1 megapixel for ref_latent"),
             "klein_do_reference": OptionInfo(True, "[Klein] Enable Reference").info("enable Edit ; disable img2img").info("pin to <b>Quicksettings</b> is recommended if changed often"),
             "qwen21_do_reference": OptionInfo(True, "[Qwen 2.1] Enable Reference").info("enable Edit ; disable img2img").info("pin to <b>Quicksettings</b> is recommended if changed often"),
             "anima_do_reference": OptionInfo(False, "[Anima] Enable Reference").info("enable Edit ; disable img2img").info("pin to <b>Quicksettings</b> is recommended if changed often").info("requires specfic Edit LoRA"),

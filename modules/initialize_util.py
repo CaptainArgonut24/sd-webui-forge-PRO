@@ -10,12 +10,13 @@ from modules.timer import startup_timer
 
 
 def gradio_server_name():
+    from modules import shared
     from modules.shared_cmd_options import cmd_opts
 
     if cmd_opts.server_name:
         return cmd_opts.server_name
     else:
-        return "0.0.0.0" if cmd_opts.listen else None
+        return "0.0.0.0" if cmd_opts.listen or shared.listen_on_network else None
 
 
 def fix_torch_version():

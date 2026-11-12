@@ -19,6 +19,36 @@ function settingsShowOneTab() {
     gradioApp().querySelector("#settings_show_one_page").click();
 }
 
+async function settingsCopyNetworkUrl(button) {
+    const url = button.dataset.networkUrl;
+    const originalText = button.textContent;
+
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(url);
+        } else {
+            const input = document.createElement("textarea");
+            input.value = url;
+            input.style.position = "fixed";
+            input.style.opacity = "0";
+            document.body.appendChild(input);
+            input.select();
+            const copied = document.execCommand("copy");
+            input.remove();
+            if (!copied) throw new Error("Clipboard copy failed");
+        }
+
+        button.textContent = "Copied";
+    } catch (error) {
+        button.textContent = "Copy failed";
+        console.error("Unable to copy the network URL", error);
+    }
+
+    setTimeout(() => {
+        button.textContent = originalText;
+    }, 2000);
+}
+
 onUiLoaded(function () {
     let edit = gradioApp().querySelector("#settings_search");
     let editTextarea = gradioApp().querySelector("#settings_search > label > input");

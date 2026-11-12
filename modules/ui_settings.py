@@ -1,6 +1,10 @@
+import html
+import ipaddress
 import json
+import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
+from urllib.parse import urlparse, urlunsplit
 
 import gradio as gr
 
@@ -73,6 +77,50 @@ def create_setting_component(key, is_quicksettings=False):
         res = comp(label=info.label, value=fun(), elem_id=elem_id, **(args or {}))
 
     return res
+
+
+def network_access_urls_html():
+    if not shared.local_url:
+        return "The Web UI network URL is not available yet."
+
+    try:
+        results = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+    except socket.gaierror:
+        results = []
+
+    addresses = set()
+    for result in results:
+        address = ipaddress.ip_address(result[4][0])
+        if address.is_private and not address.is_loopback and not address.is_link_local:
+            addresses.add(str(address))
+
+    if not addresses:
+        return "No private network address was detected. Check your device's network settings to find its local IP address."
+
+    parsed_url = urlparse(shared.local_url)
+    if parsed_url.port is None:
+        return "The Web UI network URL could not be determined."
+
+    path = parsed_url.path.rstrip("/")
+    if shared.cmd_opts.subpath:
+        subpath = f"/{shared.cmd_opts.subpath.strip('/')}"
+        if not path.endswith(subpath):
+            path = f"{path}{subpath}"
+
+    urls = [
+        urlunsplit((parsed_url.scheme, f"{address}:{parsed_url.port}", path, "", ""))
+        for address in sorted(addresses, key=lambda value: tuple(int(part) for part in value.split(".")))
+    ]
+    entries = "".join(
+        f'<div class="network-access-url"><a href="{html.escape(url, quote=True)}" target="_blank" rel="noopener">'
+        f'{html.escape(url)}</a> <button type="button" class="gr-button secondary lg" '
+        f'data-network-url="{html.escape(url, quote=True)}" onclick="settingsCopyNetworkUrl(this)">Copy URL</button></div>'
+        for url in urls
+    )
+    notice = "" if shared.cmd_opts.listen or shared.listen_on_network else (
+        "<p>Enable <b>Listen on local network</b> and restart the Web UI before using these URLs.</p>"
+    )
+    return f"<div>{notice}{entries}</div>"
 
 
 class UiSettings:
@@ -364,3 +412,11 @@ class UiSettings:
             outputs=[self.component_dict[k] for k in component_keys],
             queue=False,
         )
+
+        if "network_access_urls" in self.component_dict:
+            demo.load(
+                fn=network_access_urls_html,
+                inputs=[],
+                outputs=[self.component_dict["network_access_urls"]],
+                queue=False,
+            )

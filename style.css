@@ -1,7 +1,3 @@
-/* temporary fix to load default gradio font in frontend instead of backend */
-
-@import url("webui-assets/css/sourcesanspro.css");
-
 /* general gradio fixes */
 
 :root,
@@ -964,6 +960,138 @@ table.popup-table .link {
     background: var(--primary-700);
 }
 
+/* Responsive layout and touch targets */
+@media (max-width: 900px) {
+    #tabs > .tab-nav,
+    .extra-networks > .tab-nav {
+        display: flex;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        scrollbar-width: thin;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    #tabs > .tab-nav > button,
+    .extra-networks > .tab-nav > button {
+        flex: 0 0 auto;
+        min-height: 44px;
+        white-space: nowrap;
+    }
+
+    #settings {
+        display: block;
+    }
+
+    #settings > div {
+        padding: 0 0.5em;
+    }
+
+    #settings > div.tab-nav {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        display: flex;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        border-right: 0;
+        border-bottom: 1px solid var(--border-color-primary);
+        background: var(--body-background-fill);
+        -webkit-overflow-scrolling: touch;
+    }
+
+    #settings > div.tab-nav > button {
+        flex: 0 0 auto;
+        width: auto;
+        min-height: 44px;
+        padding: 0.5em 0.75em;
+        white-space: nowrap;
+    }
+
+    #settings > div.tab-nav .settings-category {
+        display: none;
+    }
+
+    #settings_search {
+        position: static;
+        flex: 0 0 12em;
+        min-width: 10em;
+        margin: auto 0.5em auto 0 !important;
+    }
+
+    #quicksettings {
+        flex-wrap: wrap;
+    }
+
+    #img2img_results,
+    #txt2img_results,
+    #extras_results {
+        position: static;
+    }
+
+    div.toprow-compact-tools {
+        min-width: 0 !important;
+        max-width: 100%;
+        flex-wrap: wrap;
+    }
+
+    div.accordions {
+        flex-wrap: wrap;
+    }
+}
+
+@media (max-width: 600px) {
+    .gradio-container {
+        padding: 0.5em !important;
+    }
+
+    .gradio-container button,
+    .gradio-container input[type="checkbox"],
+    .gradio-container input[type="radio"] {
+        min-height: 44px;
+    }
+
+    .gradio-container input,
+    .gradio-container select,
+    .gradio-container textarea {
+        font-size: 16px !important;
+    }
+
+    #settings > div {
+        padding: 0 0.25em;
+    }
+
+    #settings_result {
+        height: auto;
+        min-height: 1.4em;
+        margin: 0 0.5em;
+    }
+
+    #txt2img_generate,
+    #img2img_generate {
+        min-height: 3.5em;
+    }
+
+    .popup-dialog {
+        width: calc(100vw - 1em);
+        max-height: calc(100dvh - 1em);
+        overflow: auto;
+        padding: 1em !important;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        scroll-behavior: auto !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
 /* extensions */
 
 #tab_extensions table {
@@ -1191,10 +1319,6 @@ footer {
     cursor: pointer;
 
     background-image: url("./file=html/card-no-preview.jpg");
-}
-
-.extra-network-pane div.card:last-child {
-    margin-bottom: 0.5rem !important;
 }
 
 .extra-network-pane .card:hover {
@@ -1861,4 +1985,76 @@ div.xyz_entries button.secondary {
 
 #swap_axes button {
     border-radius: 8px;
+}
+
+/* visual hierarchy */
+#tabs > .tab-nav {
+    gap: 0.35em;
+    padding-bottom: 0.5em;
+    border-bottom: 1px solid var(--border-color-primary);
+}
+
+#tabs > .tab-nav > button {
+    min-height: 2.5em;
+    padding: 0.5em 0.9em;
+    border: 1px solid transparent;
+    border-radius: 0.65em;
+    color: var(--body-text-color);
+    transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+#tabs > .tab-nav > button:hover {
+    background: var(--background-fill-secondary);
+}
+
+#tabs > .tab-nav > button.selected {
+    border-color: var(--border-color-primary);
+    background: var(--background-fill-secondary);
+    color: var(--primary-500);
+    font-weight: 600;
+}
+
+#quicksettings {
+    gap: 0.75em 1em;
+    margin: 0.75em 0;
+    padding: 0.75em 1em;
+    border: 1px solid var(--border-color-primary);
+    border-radius: 0.85em;
+    background: var(--background-fill-secondary);
+}
+
+div.block.gradio-accordion {
+    border-color: var(--border-color-primary) !important;
+    border-radius: 0.85em !important;
+    padding: 0.75em 1em;
+    transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.gradio-container input:not([type="checkbox"]):not([type="radio"]),
+.gradio-container textarea,
+.gradio-container select,
+.gradio-dropdown div.wrap.wrap.wrap.wrap {
+    border-radius: 0.65em;
+}
+
+.gradio-container button:focus-visible,
+.gradio-container input:focus-visible,
+.gradio-container textarea:focus-visible,
+.gradio-container select:focus-visible {
+    outline: 2px solid var(--primary-500);
+    outline-offset: 2px;
+}
+
+.gradio-gallery {
+    border-radius: 0.85em;
+}
+
+@media (max-width: 900px) {
+    #tabs > .tab-nav {
+        padding-bottom: 0.35em;
+    }
+
+    #quicksettings {
+        padding: 0.65em;
+    }
 }
