@@ -2058,3 +2058,206 @@ div.block.gradio-accordion {
         padding: 0.65em;
     }
 }
+
+/* polished, theme-aware workspace */
+:root {
+    --forge-radius-sm: 0.55rem;
+    --forge-radius-md: 0.85rem;
+    --forge-radius-lg: 1.1rem;
+    --forge-shadow: 0 8px 24px rgba(20, 24, 32, 0.07);
+}
+
+.gradio-container {
+    max-width: 1920px !important;
+    margin: 0 auto;
+    padding: clamp(0.75rem, 1.5vw, 1.5rem) clamp(1rem, 2vw, 2rem) !important;
+    color-scheme: light;
+}
+
+.dark .gradio-container {
+    color-scheme: dark;
+}
+
+#tabs > .tab-nav {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.55rem 0.65rem;
+    border: 1px solid var(--border-color-primary);
+    border-radius: var(--forge-radius-lg);
+    background: var(--body-background-fill);
+    box-shadow: var(--forge-shadow);
+}
+
+#tabs > .tab-nav > button {
+    min-height: 2.7rem;
+    padding: 0.55rem 1rem;
+    border-radius: var(--forge-radius-sm);
+    font-weight: 550;
+}
+
+#tabs > .tab-nav > button.selected {
+    border-color: transparent;
+    background: var(--button-primary-background-fill);
+    color: var(--button-primary-text-color);
+    box-shadow: 0 2px 8px rgba(40, 48, 64, 0.12);
+}
+
+#tabs > .tab-nav > button.selected:hover {
+    background: var(--button-primary-background-fill-hover);
+    color: var(--button-primary-text-color);
+}
+
+#tabs > .tabitem {
+    padding-top: 1.15rem;
+}
+
+#quicksettings {
+    align-items: end;
+    gap: 0.8rem 1rem;
+    margin: 0 0 1rem;
+    padding: 0.85rem 1rem;
+    border-radius: var(--forge-radius-lg);
+    box-shadow: var(--forge-shadow);
+}
+
+#quicksettings > div {
+    min-width: min(13rem, 100%);
+}
+
+#quicksettings > div label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.015em;
+}
+
+#quicksettings > button {
+    margin: 0 0 0.15rem;
+}
+
+#txt2img_settings,
+#img2img_settings {
+    gap: 1rem;
+}
+
+#txt2img_settings .prompt-row,
+#img2img_settings .prompt-row {
+    gap: 0.75rem;
+}
+
+.gradio-container .gradio-textbox.prompt textarea {
+    min-height: 7rem;
+    padding: 0.9rem 1rem;
+    border-radius: var(--forge-radius-md);
+    line-height: 1.55;
+    transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.gradio-container .gradio-textbox.prompt textarea:focus {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-500) 16%, transparent);
+}
+
+.gradio-container input:not([type="checkbox"]):not([type="radio"]),
+.gradio-container textarea,
+.gradio-container select,
+.gradio-dropdown div.wrap.wrap.wrap.wrap {
+    border-radius: var(--forge-radius-sm);
+}
+
+.gradio-container button {
+    transition: background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.gradio-container button:not(:disabled):hover {
+    transform: translateY(-1px);
+}
+
+.gradio-container button:active {
+    transform: translateY(0);
+}
+
+#txt2img_generate,
+#img2img_generate {
+    min-height: 3.75rem;
+    border-radius: var(--forge-radius-md);
+    box-shadow: 0 5px 14px rgba(40, 48, 64, 0.16);
+    font-weight: 650;
+    letter-spacing: 0.01em;
+}
+
+div.block.gradio-accordion {
+    border-radius: var(--forge-radius-md) !important;
+    background: var(--background-fill-secondary);
+}
+
+.gradio-gallery,
+.gradio-gallery > .grid-wrap {
+    border-radius: var(--forge-radius-lg);
+}
+
+#txt2img_results,
+#img2img_results,
+#extras_results {
+    top: 1rem;
+}
+
+#footer {
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-color-primary);
+    color: var(--body-text-color-subdued);
+}
+
+@media (max-width: 900px) {
+    .gradio-container {
+        padding: 0.75rem !important;
+    }
+
+    #tabs > .tab-nav {
+        position: relative;
+        top: auto;
+        border-radius: var(--forge-radius-md);
+    }
+
+    #quicksettings > div {
+        min-width: min(10rem, 100%);
+    }
+}
+
+@media (max-width: 600px) {
+    .gradio-container {
+        padding: 0.5rem !important;
+    }
+
+    #tabs > .tab-nav {
+        gap: 0.2rem;
+        padding: 0.35rem;
+    }
+
+    #tabs > .tab-nav > button {
+        min-height: 2.75rem;
+        padding: 0.45rem 0.7rem;
+    }
+
+    #quicksettings {
+        gap: 0.65rem;
+        padding: 0.75rem;
+    }
+
+    .gradio-container .gradio-textbox.prompt textarea {
+        min-height: 6rem;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .gradio-container button {
+        transition: none;
+    }
+
+    .gradio-container button:not(:disabled):hover,
+    .gradio-container button:active {
+        transform: none;
+    }
+}
