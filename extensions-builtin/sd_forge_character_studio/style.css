@@ -1,0 +1,30 @@
+#character_studio {
+    max-width: 1680px;
+    margin: 0 auto;
+}
+
+#character_studio .tab-nav {
+    gap: 0.4rem;
+    padding-bottom: 0.6rem;
+    border-bottom: 1px solid var(--border-color-primary);
+}
+
+#character_studio .tab-nav > button {
+    min-height: 2.7rem;
+    padding: 0.55rem 1rem;
+    border-radius: 0.7rem;
+}
+
+.character-studio-reference {
+    align-items: end;
+    gap: 0.65rem;
+    padding: 0.65rem;
+    border: 1px solid var(--border-color-primary);
+    border-radius: 0.8rem;
+    background: var(--background-fill-secondary);
+}
+
+#character_studio [id$="_models_path"],
+#character_studio [id$="_images_path"] {
+    font-family: var(--font-mono, ui-monospace, monospace);
+}

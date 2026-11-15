@@ -99,6 +99,9 @@ class Script:
     setup_for_ui_only = False
     """If true, the script setup will only be run in Gradio UI, not in API"""
 
+    propagate_setup_errors = False
+    """If true, abort generation when this script's setup fails."""
+
     controls = None
     """A list of controls returned by the ui()."""
 
@@ -1014,6 +1017,8 @@ class ScriptRunner:
                 script_args = p.script_args[script.args_from : script.args_to]
                 script.setup(p, *script_args)
             except Exception:
+                if script.propagate_setup_errors:
+                    raise
                 errors.report(f"Error running setup: {script.filename}", exc_info=True)
 
     def set_named_arg(self, args, script_name, arg_elem_id, value, fuzzy=False):

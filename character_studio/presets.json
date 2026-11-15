@@ -1,0 +1,11 @@
+[
+  {
+    "id": "4661386b86e84d61a4c936e2b8573b27",
+    "category": "Character",
+    "name": "Chuluun",
+    "prompt": "female, anthro, Snow leopard, Chuluun, blue eyes, light blue sclera, tail.",
+    "negative_prompt": "",
+    "lora_prompt": "<lora:ChuluunLILIV2-10:1>",
+    "reference": "f8b7fa02fc964f0eb69b7f2f4dd4e7ca.png"
+  }
+]
